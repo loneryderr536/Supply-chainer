@@ -243,7 +243,10 @@ class AISMonitor:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.status = {"source": self.source, "state": "reconnecting", "error": str(e)[:200], "at": time.time()}
+                # aisstream.io drops connections with a bad key without a reason, so say what to check.
+                hint = "" if self.messages else " (no data received yet: check AISSTREAM_API_KEY)"
+                self.status = {"source": self.source, "state": "reconnecting", "error": str(e)[:200] + hint,
+                               "at": time.time()}
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 300)
 

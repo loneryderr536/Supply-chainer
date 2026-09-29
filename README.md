@@ -12,7 +12,7 @@ map, explains every number, monitors chosen routes and raises alerts when a new 
 <img alt="Python 3.11" src="https://img.shields.io/badge/python-3.11-blue">
 <img alt="FastAPI" src="https://img.shields.io/badge/API-FastAPI-009688">
 <img alt="React" src="https://img.shields.io/badge/UI-React%2018%20%2B%20Vite-61dafb">
-<img alt="Tests" src="https://img.shields.io/badge/tests-103%20passing-brightgreen">
+<img alt="Tests" src="https://img.shields.io/badge/tests-108%20passing-brightgreen">
 <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-lightgrey">
 </p>
 
@@ -142,12 +142,14 @@ pre-computed into lookup tables, so routing can query them inside Dijkstra.
 | Persona | Delay quantile | Edge weight |
 |---|---|---|
 | FASTEST | p50 | time + delay |
-| BALANCED | p85 | 0.3 · time / priority + 0.5 · (freight + carrying cost) / 150 + 8 · threat |
+| BALANCED | p85 | 0.3 · time / priority + 0.5 · freight / 150 + 8 · threat; with a cargo value, 0.5 · (freight + carrying cost / priority) / 150 + 8 · threat |
 | SAFEST | p95 | time + delay + 240 h × threat |
 
-Carrying cost per hour = cargo value × annual carrying rate ÷ 8,760 (default rate 25%/yr). With a
-cargo value of $0 BALANCED behaves as before; on Shanghai → Rotterdam it switches from sea to air
-somewhere between $1M and $5M of cargo.
+Carrying cost per hour = cargo value × annual carrying rate ÷ 8,760 (default rate 25%/yr). When a
+cargo value is given, the real carrying cost replaces BALANCED's generic time weight (so time is
+not counted twice) and BALANCED becomes the lowest landed-cost option. On Shanghai → Rotterdam it
+switches from sea to air between $8M and $9M of cargo, matching the landed-cost break-even of about
+$8.5M; `urgent` priority switches earlier.
 
 `STRICT` mode restricts a route to the chosen mode plus first- and last-mile road; `PREFERRED`
 makes other modes 1.5× more expensive. Cargo restrictions apply automatically (perishable: no sea,
@@ -314,7 +316,7 @@ Abbreviated response (captured with `LIVE_INTEL=false`, since live headlines cha
 pytest
 ```
 
-The suite has 103 tests and runs in about 25 seconds once the models are cached. Two storage tests
+The suite has 108 tests and runs in about 25 seconds once the models are cached. Two storage tests
 also run against PostgreSQL when `TEST_DATABASE_URL` is set (otherwise they are skipped). The tests check
 outcomes, not just the absence of crashes:
 
@@ -443,7 +445,6 @@ below was found by checking outputs against real scenarios.
 - [x] Cargo value and inventory carrying cost in BALANCED
 - [x] Multi-currency and multi-language UI
 - [x] Postgres and persisted live scenarios
-- [ ] Authentication, multi-tenancy and rate limiting
 
 ---
 

@@ -27,6 +27,13 @@ class TestCargoValue:
             assert c["landed_cost"] == pytest.approx(c["total_cost"] + c["inventory_cost"]["p50"], abs=0.02)
             assert c["explanation_facts"]["cost_basis"] == "landed"
 
+    @pytest.mark.parametrize("value", [1_000_000, 5_000_000, 8_000_000, 9_000_000, 20_000_000])
+    def test_balanced_is_the_lowest_landed_cost_option(self, rec, value):
+        # With a cargo value, time must not be priced twice (generic weight + carrying cost).
+        recs = rec.recommend("Shanghai", "Rotterdam", cargo_value_usd=value)["recommendations"]
+        balanced = next(c for c in recs if "BALANCED" in c["personas"])
+        assert balanced["landed_cost"] == min(c["landed_cost"] for c in recs)
+
     def test_no_value_means_freight_only(self, rec):
         c = rec.recommend("Shanghai", "Rotterdam")["recommendations"][0]
         assert c["inventory_cost"]["p50"] == 0 and c["landed_cost"] == c["total_cost"]

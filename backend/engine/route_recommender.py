@@ -153,10 +153,14 @@ class RouteRecommender:
             elif persona == "SAFEST":
                 w = t + leg["threat"] * SAFEST_RISK_HOURS
             else:
-                # Priority scales how much an hour is worth relative to a dollar. Cargo in transit
-                # also ties up capital: each hour costs value x carrying rate / 8760, priced like freight.
-                money = leg["cost"] + carry_per_h * t
-                w = (t / prio) * 0.3 + (money / 150.0) * 0.5 + (leg["threat"] * 40.0) * 0.2
+                # Priority scales how much an hour is worth relative to a dollar. Without a cargo value,
+                # time is priced by a generic weight; with one, the real carrying cost (value x rate /
+                # 8760 per hour) replaces that proxy rather than adding to it, so BALANCED minimises
+                # p85 landed cost plus risk instead of double-counting time.
+                if carry_per_h > 0:
+                    w = ((leg["cost"] + carry_per_h * t / prio) / 150.0) * 0.5 + (leg["threat"] * 40.0) * 0.2
+                else:
+                    w = (t / prio) * 0.3 + (leg["cost"] / 150.0) * 0.5 + (leg["threat"] * 40.0) * 0.2
             if soft_pref and mode not in ("transfer", soft_pref):
                 w *= PREFERRED_OFF_MODE_PENALTY
             return w
