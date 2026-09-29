@@ -18,6 +18,9 @@ from .engine.supplier_scorer import SupplierScorer
 from .engine.news_ingestion import IntelMonitor
 from .engine.store import Store
 from .engine.monitoring import RouteMonitor, shipment_plan, audit_rows, CSV_COLUMNS
+from .engine.event_feeds import GDACSFeed, AISMonitor
+from .engine.fx import FXRates, SUPPORTED as FX_SUPPORTED
+from .engine.report_pdf import build_report
 
 # The US-only simulator pipeline (graph_model / simulator / baseline / weather_integration) was
 # instantiated here but never used by any endpoint; it is no longer loaded at startup.
@@ -25,6 +28,7 @@ from .engine.monitoring import RouteMonitor, shipment_plan, audit_rows, CSV_COLU
 DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 LIVE_INTEL = os.getenv("LIVE_INTEL", "true").lower() == "true"
 INTEL_REFRESH_S = int(os.getenv("INTEL_REFRESH_S", "900"))
+FEED_REFRESH_S = int(os.getenv("FEED_REFRESH_S", "1800"))
 
 predictor = ThreatIntelligencePredictor(lazy_load=True)
 canonical_hubs = load_canonical_hubs()
@@ -35,6 +39,10 @@ intel = IntelMonitor(canonical_hubs, ContrastiveNLPEngine(lazy_load=True), CARFF
 recommender = RouteRecommender(multimodal_net, predictor, None, scenario_mgr, demo_mode=DEMO_MODE, intel=intel)
 supplier_scorer = SupplierScorer(os.path.join(os.path.dirname(__file__), 'data', 'suppliers.json'))
 store = Store()
+fx = FXRates(live=os.getenv("LIVE_FX", "true").lower() == "true")
+# Live scenarios survive restarts: restore whatever an operator had switched on.
+for _sid in store.load_live_scenarios():
+    scenario_mgr.activate(_sid)
 
 
 class AlertHub:
@@ -59,6 +67,30 @@ class AlertHub:
 
 alert_hub = AlertHub()
 monitor = RouteMonitor(store, recommender, on_alert=alert_hub.publish)
+gdacs = GDACSFeed(canonical_hubs)
+ais = AISMonitor(hub_index)
+
+
+def _apply_feed(source: str, picture: dict):
+    """Publish a structured feed's picture and re-check monitored routes if it changed."""
+    before = {e["hub_id"]: e["threat_by_mode"] for e in intel.entries() if e["source"] == source}
+    intel.replace_source(source, picture)
+    after = {h: e["threat_by_mode"] for h, e in picture.items()}
+    if after != before:
+        monitor.evaluate_all(f"feed_update:{source}")
+
+
+def _refresh_gdacs():
+    picture = gdacs.refresh()
+    if picture is not None:
+        _apply_feed("GDACS", picture)
+    return gdacs.status
+
+
+async def _feed_loop():
+    while True:
+        await asyncio.to_thread(_refresh_gdacs)
+        await asyncio.sleep(FEED_REFRESH_S)
 
 
 async def _intel_loop():
@@ -78,6 +110,7 @@ def _startup_warmup():
     recommender.run_background_warmup()
     if LIVE_INTEL and not DEMO_MODE:
         _scan_and_evaluate()
+        ais.start(lambda picture: _apply_feed("AIS", picture))
 
 
 @asynccontextmanager
@@ -89,6 +122,7 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(asyncio.to_thread(_startup_warmup)))
         if LIVE_INTEL:
             tasks.append(asyncio.create_task(_intel_loop()))
+            tasks.append(asyncio.create_task(_feed_loop()))
     yield
     for t in tasks:
         t.cancel()
@@ -116,6 +150,8 @@ class RecommendRequest(BaseModel):
     scenario: Optional[str] = None  # what-if scenario for this request only
     scenarios: Optional[List[str]] = None
     overrides: Optional[dict] = None
+    cargo_value_usd: float = 0.0  # enables inventory carrying cost in BALANCED and landed cost
+    carrying_cost_rate: float = 0.25  # annual carrying cost as a share of cargo value
     save: bool = True
 
 
@@ -256,6 +292,8 @@ def recommend_routes(req: RecommendRequest):
         scenario=req.scenario,
         scenarios=req.scenarios,
         overrides=req.overrides,
+        cargo_value_usd=req.cargo_value_usd,
+        carrying_cost_rate=req.carrying_cost_rate,
     )
     if req.save and "recommendations" in result:
         result["run_id"] = store.save_run(req.model_dump(exclude={"save"}), result)
@@ -290,6 +328,23 @@ def export_run_csv(run_id: str):
                     headers={"Content-Disposition": f'attachment; filename="supplychainer_{run_id}.csv"'})
 
 
+@app.get("/api/runs/{run_id}/report.pdf")
+def export_run_pdf(run_id: str, currency: str = "USD"):
+    """Boardroom PDF: recommendation, hold-vs-reroute, options, ETA bands, map, leg detail, explanations."""
+    currency = currency.upper()
+    if currency not in FX_SUPPORTED:
+        raise HTTPException(400, f"unsupported currency {currency}; use one of {FX_SUPPORTED}")
+    pdf = build_report(_run_or_404(run_id), currency, fx)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="supplychainer_{run_id}.pdf"'})
+
+
+@app.get("/api/fx")
+def fx_rates():
+    """USD-based exchange rates for the dashboard's currency selector."""
+    return fx.rates()
+
+
 @app.get("/api/runs/{run_id}/export.json")
 def export_run_json(run_id: str, persona: Optional[str] = None):
     """TMS/ERP shipment-plan payload (schema supplychainer.shipment_plan.v1)."""
@@ -301,6 +356,7 @@ def export_run_json(run_id: str, persona: Optional[str] = None):
 async def activate_scenario(scenario_id: str):
     if not scenario_mgr.activate(scenario_id):
         raise HTTPException(404, f"unknown scenario {scenario_id}")
+    store.set_live_scenario(scenario_id, True)
     alerts = await asyncio.to_thread(monitor.evaluate_all, f"scenario_activated:{scenario_id}")
     return {"active_scenarios": scenario_mgr.active_scenario_ids, "alerts_raised": alerts}
 
@@ -308,6 +364,7 @@ async def activate_scenario(scenario_id: str):
 @app.post("/api/scenarios/{scenario_id}/deactivate")
 def deactivate_scenario(scenario_id: str):
     scenario_mgr.deactivate(scenario_id)
+    store.set_live_scenario(scenario_id, False)
     return {"active_scenarios": scenario_mgr.active_scenario_ids}
 
 
@@ -347,8 +404,19 @@ def ack_alert(alert_id: str):
 
 @app.get("/api/intel")
 def get_intel():
-    return {"threats": list(intel.hub_threats().values()), "last_scan": intel.last_scan,
-            "watchlist_size": len(intel.watchlist), "nlp_ready": intel.nlp.ready}
+    return {"threats": intel.entries(), "last_scan": intel.last_scan,
+            "watchlist_size": len(intel.watchlist), "nlp_ready": intel.nlp.ready,
+            "feeds": [gdacs.status, ais.status]}
+
+
+@app.get("/api/feeds")
+def feed_status():
+    return {"feeds": [gdacs.status, {**ais.status, "zones": ais.zone_stats()} if ais.api_key else ais.status]}
+
+
+@app.post("/api/feeds/gdacs/refresh")
+async def refresh_gdacs():
+    return await asyncio.to_thread(_refresh_gdacs)
 
 
 @app.post("/api/intel/report")
@@ -365,8 +433,8 @@ async def report_intel(req: IntelReport):
 
 
 @app.delete("/api/intel/{hub_id}")
-def clear_intel(hub_id: str):
-    intel.clear(hub_id)
+def clear_intel(hub_id: str, source: Optional[str] = None):
+    intel.clear(hub_id, source)
     return {"ok": True}
 
 

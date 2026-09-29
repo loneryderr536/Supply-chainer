@@ -18,7 +18,8 @@ ALERT_SCHEMA = "supplychainer.route_alert.v1"
 def _summary(c: Dict[str, Any]) -> Dict[str, Any]:
     return {"persona": "/".join(c.get("personas", [c["persona"]])), "primary_mode": c["primary_mode"],
             "chokepoints": c["chokepoints"], "adjusted_eta": c["adjusted_eta"], "eta_band": c["eta_band"],
-            "total_cost": c["total_cost"], "threat_level": c["threat_level"]}
+            "total_cost": c["total_cost"], "landed_cost": c.get("landed_cost", c["total_cost"]),
+            "threat_level": c["threat_level"]}
 
 
 class RouteMonitor:
@@ -80,7 +81,8 @@ class RouteMonitor:
             source=req["source"], destination=req["destination"],
             transport_preference=req.get("transport_preference", "any"),
             routing_policy=req.get("routing_policy", "STRICT"), cargo_type=req.get("cargo_type", "general"),
-            priority=req.get("priority", "normal"), overrides=req.get("overrides"))
+            priority=req.get("priority", "normal"), overrides=req.get("overrides"),
+            cargo_value_usd=req.get("cargo_value_usd", 0.0), carrying_cost_rate=req.get("carrying_cost_rate", 0.25))
         alternative = None
         if "recommendations" in alt:
             same = [c for c in alt["recommendations"] if w["persona"] in c["personas"]]
@@ -149,7 +151,9 @@ def shipment_plan(run: Dict[str, Any], persona: Optional[str] = None) -> Dict[st
         plans.append({
             "option": "/".join(c.get("personas", [c["persona"]])), "primary_mode": c["primary_mode"],
             "planned_transit_h": c["adjusted_eta"], "eta_quantiles_h": c["eta_band"],
-            "total_cost_usd": c["total_cost"], "max_risk_score": c["threat_level"], "movements": movements,
+            "total_cost_usd": c["total_cost"], "inventory_carrying_cost_usd": c.get("inventory_cost", {}).get("p50", 0.0),
+            "landed_cost_usd": c.get("landed_cost", c["total_cost"]),
+            "max_risk_score": c["threat_level"], "movements": movements,
         })
     return {
         "schema": EXPORT_SCHEMA, "run_id": run["id"], "generated_at": run["created_at"],

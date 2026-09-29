@@ -1,8 +1,8 @@
 """
-SQLite persistence for route history, monitored routes and alerts.
+Persistence for route history, monitored routes, alerts and the live scenario picture.
 
-Everything the dashboard used to keep only in memory (and lose on restart) lives here. SQLite
-keeps the prototype dependency-free; the schema is plain SQL so it ports to Postgres directly.
+SQLite (a single file, zero setup) is the default. Set DATABASE_URL to a postgres:// URL to use
+PostgreSQL instead; the schema and queries are shared, only the driver and placeholders differ.
 """
 import json
 import os
@@ -14,60 +14,91 @@ from typing import Any, Dict, List, Optional
 
 DEFAULT_DB = os.path.join(os.path.dirname(__file__), "..", "data", "supplychainer.db")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS runs (
-    id TEXT PRIMARY KEY,
-    created_at REAL NOT NULL,
-    origin TEXT, destination TEXT,
-    request TEXT NOT NULL,
-    response TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS watches (
-    id TEXT PRIMARY KEY,
-    created_at REAL NOT NULL,
-    run_id TEXT NOT NULL REFERENCES runs(id),
-    persona TEXT NOT NULL,
-    label TEXT,
-    request TEXT NOT NULL,
-    route TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1
-);
-CREATE TABLE IF NOT EXISTS alerts (
-    id TEXT PRIMARY KEY,
-    created_at REAL NOT NULL,
-    watch_id TEXT NOT NULL REFERENCES watches(id),
-    signature TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    message TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    acknowledged INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_alerts_watch ON alerts(watch_id, acknowledged);
-"""
+# DOUBLE PRECISION (not REAL) so epoch timestamps keep sub-second precision on Postgres.
+SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS runs (
+        id TEXT PRIMARY KEY,
+        created_at DOUBLE PRECISION NOT NULL,
+        origin TEXT, destination TEXT,
+        request TEXT NOT NULL,
+        response TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS watches (
+        id TEXT PRIMARY KEY,
+        created_at DOUBLE PRECISION NOT NULL,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        persona TEXT NOT NULL,
+        label TEXT,
+        request TEXT NOT NULL,
+        route TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1
+    )""",
+    """CREATE TABLE IF NOT EXISTS alerts (
+        id TEXT PRIMARY KEY,
+        created_at DOUBLE PRECISION NOT NULL,
+        watch_id TEXT NOT NULL REFERENCES watches(id),
+        signature TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        message TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        acknowledged INTEGER NOT NULL DEFAULT 0
+    )""",
+    """CREATE TABLE IF NOT EXISTS live_scenarios (
+        scenario_id TEXT PRIMARY KEY,
+        activated_at DOUBLE PRECISION NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_alerts_watch ON alerts(watch_id, acknowledged)",
+]
 
 
 class Store:
-    def __init__(self, path: Optional[str] = None):
-        self.path = path or os.getenv("SUPPLYCHAINER_DB", DEFAULT_DB)
-        if self.path != ":memory:":
-            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+    def __init__(self, path: Optional[str] = None, url: Optional[str] = None):
+        url = url if url is not None else os.getenv("DATABASE_URL", "")
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+        if url.startswith(("postgres://", "postgresql://")):
+            import psycopg
+            from psycopg.rows import dict_row
+            self.backend = "postgres"
+            self.path = url.split("@")[-1]  # host/db only, never the password
+            self._conn = psycopg.connect(url, autocommit=True, row_factory=dict_row)
+        else:
+            self.backend = "sqlite"
+            self.path = path or os.getenv("SUPPLYCHAINER_DB", DEFAULT_DB)
+            if self.path != ":memory:":
+                os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+            self._conn = sqlite3.connect(self.path, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
         with self._lock:
-            self._conn.executescript(SCHEMA)
-            self._conn.commit()
+            for stmt in SCHEMA:
+                self._conn.execute(stmt)
+            if self.backend == "sqlite":
+                self._conn.commit()
 
-    def _exec(self, sql: str, args: tuple = ()) -> sqlite3.Cursor:
+    def _sql(self, sql: str) -> str:
+        return sql.replace("?", "%s") if self.backend == "postgres" else sql
+
+    def _exec(self, sql: str, args: tuple = ()):
         with self._lock:
-            cur = self._conn.execute(sql, args)
-            self._conn.commit()
+            cur = self._conn.execute(self._sql(sql), args)
+            if self.backend == "sqlite":
+                self._conn.commit()
             return cur
 
-    def _all(self, sql: str, args: tuple = ()) -> List[sqlite3.Row]:
+    def _all(self, sql: str, args: tuple = ()) -> List[Any]:
         with self._lock:
-            return self._conn.execute(sql, args).fetchall()
+            return self._conn.execute(self._sql(sql), args).fetchall()
+
+    # ------------------------------------------------------------ live scenarios
+    def load_live_scenarios(self) -> List[str]:
+        return [r["scenario_id"] for r in self._all("SELECT scenario_id FROM live_scenarios ORDER BY activated_at")]
+
+    def set_live_scenario(self, scenario_id: str, active: bool):
+        if active:
+            if not self._all("SELECT 1 FROM live_scenarios WHERE scenario_id = ?", (scenario_id,)):
+                self._exec("INSERT INTO live_scenarios VALUES (?, ?)", (scenario_id, time.time()))
+        else:
+            self._exec("DELETE FROM live_scenarios WHERE scenario_id = ?", (scenario_id,))
 
     # --------------------------------------------------------------------- runs
     def save_run(self, request: Dict[str, Any], response: Dict[str, Any]) -> str:

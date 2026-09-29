@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import { feature } from 'topojson-client';
 import land110m from 'world-atlas/land-110m.json';
 import { MODE_COLORS } from './api.js';
+import { useI18n } from './i18n.jsx';
 
 // Keep a leg on the short side of the antimeridian (e.g. Shanghai -> Los Angeles crosses the Pacific).
 function unwrap(from, to) {
@@ -14,9 +15,31 @@ function unwrap(from, to) {
   return [from, [lat2, lon2]];
 }
 
+// Cut rings that jump across ±180° so Leaflet doesn't draw them as lines across the whole map.
+function splitAntimeridian(fc) {
+  const cut = (ring) => {
+    const pieces = [];
+    let cur = [ring[0]];
+    for (let i = 1; i < ring.length; i++) {
+      if (Math.abs(ring[i][0] - ring[i - 1][0]) > 180) { pieces.push(cur); cur = []; }
+      cur.push(ring[i]);
+    }
+    pieces.push(cur);
+    return pieces.filter((p) => p.length >= 3);
+  };
+  const polys = [];
+  fc.features.forEach((f) => {
+    const geom = f.geometry;
+    const list = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
+    list.forEach((poly) => cut(poly[0]).forEach((ring) => polys.push([ring])));
+  });
+  return { type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: polys } };
+}
+
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export default function RouteMap({ network, recommendations, selected, disruptedHubs, closedHubs, intelHubs }) {
+  const { t } = useI18n();
   const el = useRef(null);
   const map = useRef(null);
   const contextLayer = useRef(null);
@@ -27,7 +50,7 @@ export default function RouteMap({ network, recommendations, selected, disrupted
       .setView([22, 60], 2);
     // Bundled coastline so the map stays readable without internet access; online tiles draw on top.
     map.current.createPane('land').style.zIndex = 150;
-    const land = feature(land110m, land110m.objects.land);
+    const land = splitAntimeridian(feature(land110m, land110m.objects.land));
     [-360, 0, 360].forEach((off) => L.geoJSON(land, {
       pane: 'land', interactive: false,
       style: { color: '#334155', weight: 0.6, fillColor: '#1e293b', fillOpacity: 1 },
@@ -105,11 +128,11 @@ export default function RouteMap({ network, recommendations, selected, disrupted
       <div ref={el} className="route-map" role="region" aria-label="Route map" />
       <div className="map-legend">
         {Object.entries(MODE_COLORS).filter(([m]) => m !== 'TRANSFER').map(([m, c]) => (
-          <span key={m}><i style={{ background: c }} />{m}</span>
+          <span key={m}><i style={{ background: c }} />{t(`legmode.${m}`)}</span>
         ))}
-        <span><i style={{ background: '#ef4444', borderRadius: '50%' }} />CLOSED</span>
-        <span><i style={{ background: '#f97316', borderRadius: '50%' }} />DISRUPTED</span>
-        <span><i style={{ background: '#eab308', borderRadius: '50%' }} />LIVE INTEL</span>
+        <span><i style={{ background: '#ef4444', borderRadius: '50%' }} />{t('map.closed')}</span>
+        <span><i style={{ background: '#f97316', borderRadius: '50%' }} />{t('map.disrupted')}</span>
+        <span><i style={{ background: '#eab308', borderRadius: '50%' }} />{t('map.intel')}</span>
       </div>
     </div>
   );

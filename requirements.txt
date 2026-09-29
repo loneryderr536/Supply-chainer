@@ -70,3 +70,5 @@ uvloop==0.22.1
 watchfiles==1.1.1
 websockets==16.0
 pytest==9.1.1
+reportlab==4.4.4
+psycopg[binary]==3.2.10

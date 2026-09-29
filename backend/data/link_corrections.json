@@ -1,0 +1,31 @@
+{
+  "_about": "Land links removed from the network because they cross open water with no bridge or tunnel, or because the railway does not exist or is out of service. Each would let routes bypass a chokepoint or scenario overland. Applied to declared connections and to the automatic <200 km road links.",
+  "remove": [
+    {"a": "PORT-PIRAEUS", "b": "PORT-ALEXANDR", "modes": ["rail"], "reason": "Crosses the Mediterranean"},
+    {"a": "PORT-PIRAEUS", "b": "PORT-GIOIA", "modes": ["rail"], "reason": "Crosses the Ionian Sea"},
+    {"a": "PORT-THESSALONIKI", "b": "PORT-GIOIA", "modes": ["rail"], "reason": "Crosses the Adriatic/Ionian Sea"},
+    {"a": "PORT-ALEXANDR", "b": "PORT-HAIFA", "modes": ["rail"], "reason": "No operating rail line across Sinai"},
+    {"a": "PORT-HAIFA", "b": "RAIL-ISTANBUL", "modes": ["rail"], "reason": "No operating rail link through Syria"},
+    {"a": "PORT-DJIBOUTI", "b": "PORT-PORTSUDAN", "modes": ["rail"], "reason": "No railway via Eritrea; bypasses Bab-el-Mandeb"},
+    {"a": "PORT-PORTSUDAN", "b": "ICD-RIYADH", "modes": ["rail"], "reason": "Crosses the Red Sea"},
+    {"a": "PORT-BANDARABBAS", "b": "ICD-RIYADH", "modes": ["rail"], "reason": "Crosses the Persian Gulf; bypasses Hormuz"},
+    {"a": "PORT-BANDARABBAS", "b": "HUB-DAMMAM", "modes": ["rail"], "reason": "Crosses the Persian Gulf; bypasses Hormuz"},
+    {"a": "PORT-BUSAN", "b": "PORT-DALIAN", "modes": ["rail"], "reason": "Crosses the Yellow Sea / North Korea"},
+    {"a": "AIR-INCHEON", "b": "PORT-DALIAN", "modes": ["rail"], "reason": "Crosses the Yellow Sea"},
+    {"a": "AIR-INCHEON", "b": "PORT-VLADIVOSTOK", "modes": ["rail"], "reason": "No rail transit through North Korea"},
+    {"a": "PORT-SHENZHEN", "b": "PORT-KAOHSIUNG", "modes": ["rail"], "reason": "Crosses the Taiwan Strait"},
+    {"a": "PORT-KAOHSIUNG", "b": "PORT-XIAMEN", "modes": ["rail"], "reason": "Crosses the Taiwan Strait"},
+    {"a": "HUB-STOCKHOLM", "b": "RAIL-HELSINKI", "modes": ["rail"], "reason": "Crosses the Baltic Sea"},
+    {"a": "HUB-STOCKHOLM", "b": "PORT-HELSINKI", "modes": ["rail"], "reason": "Crosses the Baltic Sea"},
+    {"a": "PORT-TANGIER", "b": "HUB-ZARAGOZA", "modes": ["rail"], "reason": "Crosses the Strait of Gibraltar"},
+    {"a": "PORT-VALPARAISO", "b": "RAIL-BUENOSAIRES", "modes": ["rail"], "reason": "Trans-Andean railway closed since 1984"},
+    {"a": "PORT-ALGECIRAS", "b": "PORT-TANGIER", "modes": ["road", "rail"], "reason": "Crosses the Strait of Gibraltar; bypasses CHOKE-GIBRAL"},
+    {"a": "PORT-SINGAPORE", "b": "PORT-TANJUNGSAUH", "modes": ["road"], "reason": "Singapore Strait; no fixed link to Batam"},
+    {"a": "AIR-CHANGI", "b": "PORT-TANJUNGSAUH", "modes": ["road"], "reason": "Singapore Strait; no fixed link to Batam"},
+    {"a": "HUB-SINGAPORE", "b": "PORT-TANJUNGSAUH", "modes": ["road"], "reason": "Singapore Strait; no fixed link to Batam"},
+    {"a": "PORT-TPELEPAS", "b": "PORT-TANJUNGSAUH", "modes": ["road"], "reason": "Singapore Strait; no fixed link to Batam"},
+    {"a": "PORT-FELIXSTOWE", "b": "HUB-ROTTERDAM", "modes": ["road"], "reason": "Crosses the North Sea"},
+    {"a": "PORT-FELIXSTOWE", "b": "HUB-LILLE", "modes": ["road"], "reason": "Crosses the North Sea (the Channel Tunnel route is modelled via Calais)"},
+    {"a": "PORT-BUENOSAIRES", "b": "PORT-MONTEVIDEO", "modes": ["road"], "reason": "Crosses the Rio de la Plata"}
+  ]
+}

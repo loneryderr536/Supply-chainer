@@ -17,6 +17,8 @@ PREFERRED_OFF_MODE_PENALTY = 1.5  # soft bias for routing_policy=PREFERRED
 # SAFEST prices threat as risk-hours: a certain disruption (threat 1.0) costs 10 days. Additive,
 # so a weak signal on a long ocean leg cannot multiply that leg's cost several times over.
 SAFEST_RISK_HOURS = 240.0
+HOURS_PER_YEAR = 8760.0
+DEFAULT_CARRYING_RATE = 0.25  # annual inventory carrying cost as a share of cargo value (typical 20-30%)
 Z85, Z95 = 1.036, 1.645
 
 
@@ -105,7 +107,7 @@ class RouteRecommender:
             by_mode = hub_live["threat_by_mode"]
             t = by_mode.get(mode, 0.0)
             if t > 0:
-                return t, 0.0, False, hub_live["headline"], hub_live.get("category"), "LIVE_NEWS"
+                return t, 0.0, False, hub_live["headline"], hub_live.get("category"), hub_live.get("source", "LIVE_NEWS")
         return 0.0, 0.0, False, None, None, None
 
     def _leg(self, G, u, v, d, disruptions, live) -> Dict[str, Any]:
@@ -130,7 +132,7 @@ class RouteRecommender:
         return leg
 
     def _weight_fn(self, G, persona, disruptions, live, allowed_modes, soft_pref, blocked_modes,
-                   avoid_hubs, priority, respect_closures=True):
+                   avoid_hubs, priority, respect_closures=True, carry_per_h=0.0):
         q = PERSONA_QUANTILE[persona]
         prio = PRIORITY_MULTIPLIERS.get(priority, 1.0)
 
@@ -151,8 +153,10 @@ class RouteRecommender:
             elif persona == "SAFEST":
                 w = t + leg["threat"] * SAFEST_RISK_HOURS
             else:
-                # Priority scales how much an hour is worth relative to a dollar.
-                w = (t / prio) * 0.3 + (leg["cost"] / 150.0) * 0.5 + (leg["threat"] * 40.0) * 0.2
+                # Priority scales how much an hour is worth relative to a dollar. Cargo in transit
+                # also ties up capital: each hour costs value x carrying rate / 8760, priced like freight.
+                money = leg["cost"] + carry_per_h * t
+                w = (t / prio) * 0.3 + (money / 150.0) * 0.5 + (leg["threat"] * 40.0) * 0.2
             if soft_pref and mode not in ("transfer", soft_pref):
                 w *= PREFERRED_OFF_MODE_PENALTY
             return w
@@ -170,7 +174,8 @@ class RouteRecommender:
                   routing_policy: str = "STRICT", cargo_type: str = "general",
                   priority: str = "normal", scenario: str = None,
                   overrides: dict = None, scenarios: Optional[List[str]] = None,
-                  include_live_scenarios: bool = True) -> dict:
+                  include_live_scenarios: bool = True, cargo_value_usd: float = 0.0,
+                  carrying_cost_rate: float = DEFAULT_CARRYING_RATE) -> dict:
         t0 = time.perf_counter()
         overrides = overrides or {}
         avoid_hubs = set(overrides.get("avoid_chokepoints", []))
@@ -202,14 +207,19 @@ class RouteRecommender:
         allowed = {pref, "transfer", "road"} if (pref != "any" and policy == "STRICT") else None
         soft = pref if (pref != "any" and policy == "PREFERRED") else None
         blocked = {m for m, p in MODE_PROFILES.items() if cargo_type in p.get("cargo_restrictions", [])}
+        cargo_value = max(0.0, float(cargo_value_usd or 0.0))
+        carry_rate = max(0.0, float(carrying_cost_rate if carrying_cost_rate is not None else DEFAULT_CARRYING_RATE))
+        carry_per_h = cargo_value * carry_rate / HOURS_PER_YEAR
 
         candidates = []
         for persona in PERSONAS:
-            wf = self._weight_fn(G, persona, disruptions, live, allowed, soft, blocked, avoid_hubs, priority)
+            wf = self._weight_fn(G, persona, disruptions, live, allowed, soft, blocked, avoid_hubs, priority,
+                                 carry_per_h=carry_per_h)
             path = self._shortest(G, sources, targets, wf)
             if not path:
                 continue
             cand = self._compose(G, path, persona, disruptions, live, origin_hub=res_s["hub"])
+            self._add_inventory_cost(cand, carry_per_h)
             if cand["total_cost"] > cost_ceiling or cand["adjusted_eta"] > max_delay * 24:
                 continue
             cand["override_applied"] = bool(avoid_hubs or cost_ceiling < 999999 or max_delay < 9999)
@@ -240,7 +250,7 @@ class RouteRecommender:
         hold_option = None
         if closed_hubs:
             hold_option = self._hold_option(G, sources, targets, disruptions, live, allowed, blocked,
-                                            avoid_hubs, priority, final, res_s["hub"])
+                                            avoid_hubs, priority, final, res_s["hub"], carry_per_h)
 
         return {
             "origin": source, "destination": destination,
@@ -250,7 +260,8 @@ class RouteRecommender:
             "closed_hubs": sorted(closed_hubs),
             "hold_option": hold_option,
             "request": {"transport_preference": pref, "routing_policy": policy,
-                        "cargo_type": cargo_type, "priority": priority},
+                        "cargo_type": cargo_type, "priority": priority,
+                        "cargo_value_usd": cargo_value, "carrying_cost_rate": carry_rate},
             "engine": {"latency_ms": round((time.perf_counter() - t0) * 1000, 1),
                        "live_intel_hubs": len(live), **self.engine_status()},
             "recommendations": final[:3],
@@ -287,7 +298,7 @@ class RouteRecommender:
                 trace["cost"]["scenario"] += surcharge
                 trace["eta"]["scenario"] += leg["scenario_delay"]
                 trace["risk"]["scenario"] = max(trace["risk"]["scenario"], leg["threat"])
-            elif leg["source"] == "LIVE_NEWS":
+            elif leg["source"] is not None:  # live intel: news, analyst, GDACS, AIS
                 trace["risk"]["live_news"] = max(trace["risk"]["live_news"], leg["threat"])
             else:
                 trace["risk"]["baseline"] = max(trace["risk"]["baseline"], leg["threat"])
@@ -379,12 +390,22 @@ class RouteRecommender:
         cand = self._compose(G, path_nodes, persona, disruptions, live, origin_hub=G.nodes[path_nodes[0]]["physical_id"])
         cand["blocked_at"] = sorted({G.nodes[n]["physical_id"] for n in path_nodes
                                      if disruptions.get(G.nodes[n]["physical_id"], {}).get("closed")})
-        cand["affected_hubs"] = sorted({l["to"] for l in cand["legs"] if l["intel_source"] in ("SCENARIO", "LIVE_NEWS")}
+        cand["affected_hubs"] = sorted({l["to"] for l in cand["legs"] if l["intel_source"] != "NO_SIGNAL"}
                                        | ({cand["legs"][0]["from"]} if cand["legs"] and cand["legs"][0]["from"] in disruptions else set()))
         cand["applied_scenarios"] = applied
         return cand
 
-    def _hold_option(self, G, sources, targets, disruptions, live, allowed, blocked, avoid, priority, final, origin_hub):
+    @staticmethod
+    def _add_inventory_cost(cand: Dict[str, Any], carry_per_h: float):
+        """Capital tied up in transit: expected (p50) and tail (p95) carrying cost, and landed cost."""
+        band = cand["eta_band"]
+        cand["inventory_cost"] = {"per_hour": round(carry_per_h, 2),
+                                  "p50": round(carry_per_h * band["p50"], 2),
+                                  "p95": round(carry_per_h * band["p95"], 2)}
+        cand["landed_cost"] = round(cand["total_cost"] + cand["inventory_cost"]["p50"], 2)
+
+    def _hold_option(self, G, sources, targets, disruptions, live, allowed, blocked, avoid, priority, final, origin_hub,
+                     carry_per_h=0.0):
         """
         Compare rerouting with waiting: take the route we would normally use (no scenarios) and,
         if it runs through a closed hub, price it with the announced reopening delay.
@@ -398,6 +419,7 @@ class RouteRecommender:
         if not closed_on_path:
             return None
         cand = self._compose(G, path, "FASTEST", disruptions, live, origin_hub=origin_hub)
+        self._add_inventory_cost(cand, carry_per_h)
         best = min(final, key=lambda c: c["eta_band"]["p50"])
         delta = round(cand["eta_band"]["p50"] - best["eta_band"]["p50"], 1)
         return {
@@ -406,6 +428,7 @@ class RouteRecommender:
             "adjusted_eta": cand["adjusted_eta"],
             "eta_band": cand["eta_band"],
             "total_cost": cand["total_cost"],
+            "landed_cost": cand["landed_cost"],
             "delta_vs_best_reroute_h": delta,
             "verdict": ("REROUTE" if delta > 0 else "HOLD"),
             "note": (f"Waiting for {', '.join(closed_on_path)} to reopen is {abs(delta)}h "
@@ -416,32 +439,59 @@ class RouteRecommender:
     # ------------------------------------------------------------- explanations
     @staticmethod
     def _explain(cands: List[Dict[str, Any]]):
-        """Explanations built only from numbers in the candidate set (no invented percentages)."""
+        """
+        Explanations built only from numbers in the candidate set (no invented percentages).
+        `explanation_facts` carries the same content as structured data so the dashboard can
+        render it in the viewer's language and currency; `explanation` is the English rendering.
+        """
         if not cands:
             return
+        with_value = any(c.get("inventory_cost", {}).get("per_hour", 0) > 0 for c in cands)
+        cost_of = (lambda c: c["landed_cost"]) if with_value else (lambda c: c["total_cost"])
         for c in cands:
             others = [o for o in cands if o is not c]
             band = c["eta_band"]
-            parts = [f"{' / '.join(c['personas'])}: {c['primary_mode']} via "
-                     f"{', '.join(n.replace('CHOKE-', '') for n in c['chokepoints']) or 'no chokepoints'}; "
-                     f"expected {band['p50']}h (p85 {band['p85']}h, p95 {band['p95']}h), "
-                     f"${c['total_cost']:,.0f}, {c['transfers']} handoffs."]
+            facts = {
+                "personas": c["personas"], "primary_mode": c["primary_mode"],
+                "chokepoints": [n.replace("CHOKE-", "") for n in c["chokepoints"]],
+                "p50_h": band["p50"], "p85_h": band["p85"], "p95_h": band["p95"],
+                "cost_usd": round(cost_of(c), 2), "cost_basis": "landed" if with_value else "freight",
+                "transfers": c["transfers"], "scenario_delay_h": c["audit_trace"]["eta"]["scenario"],
+                "faster_by_h": None, "slower_by_h": None, "slower_than": None,
+                "cheaper_by_usd": None, "costlier_by_usd": None, "costlier_than": None, "avoids": [],
+            }
             if others:
                 fastest = min(others, key=lambda o: o["eta_band"]["p50"])
-                cheapest = min(others, key=lambda o: o["total_cost"])
+                cheapest = min(others, key=cost_of)
                 dt = round(fastest["eta_band"]["p50"] - band["p50"], 1)
-                dc = round(cheapest["total_cost"] - c["total_cost"], 0)
+                dc = round(cost_of(cheapest) - cost_of(c), 0)
                 if dt > 0:
-                    parts.append(f"{dt}h faster than the next option.")
+                    facts["faster_by_h"] = dt
                 elif dt < 0:
-                    parts.append(f"{-dt}h slower than {fastest['persona']}.")
+                    facts["slower_by_h"], facts["slower_than"] = -dt, fastest["persona"]
                 if dc > 0:
-                    parts.append(f"${dc:,.0f} cheaper than the lowest-cost alternative.")
+                    facts["cheaper_by_usd"] = dc
                 elif dc < 0:
-                    parts.append(f"costs ${-dc:,.0f} more than {cheapest['persona']}.")
-                avoided = sorted({p for o in others for p in o["chokepoints"]} - set(c["chokepoints"]))
-                if avoided:
-                    parts.append(f"Avoids {', '.join(a.replace('CHOKE-', '') for a in avoided)}.")
-            if c["audit_trace"]["eta"]["scenario"] > 0:
-                parts.append(f"Includes {c['audit_trace']['eta']['scenario']}h announced scenario delay.")
+                    facts["costlier_by_usd"], facts["costlier_than"] = -dc, cheapest["persona"]
+                facts["avoids"] = sorted({p.replace("CHOKE-", "") for o in others for p in o["chokepoints"]}
+                                         - set(facts["chokepoints"]))
+            c["explanation_facts"] = facts
+
+            label = "landed" if with_value else ""
+            parts = [f"{' / '.join(c['personas'])}: {c['primary_mode']} via "
+                     f"{', '.join(facts['chokepoints']) or 'no chokepoints'}; "
+                     f"expected {band['p50']}h (p85 {band['p85']}h, p95 {band['p95']}h), "
+                     f"${facts['cost_usd']:,.0f}{' landed' if with_value else ''}, {c['transfers']} handoffs."]
+            if facts["faster_by_h"]:
+                parts.append(f"{facts['faster_by_h']}h faster than the next option.")
+            if facts["slower_by_h"]:
+                parts.append(f"{facts['slower_by_h']}h slower than {facts['slower_than']}.")
+            if facts["cheaper_by_usd"]:
+                parts.append(f"${facts['cheaper_by_usd']:,.0f} cheaper{' (' + label + ')' if label else ''} than the lowest-cost alternative.")
+            if facts["costlier_by_usd"]:
+                parts.append(f"costs ${facts['costlier_by_usd']:,.0f} more{' (' + label + ')' if label else ''} than {facts['costlier_than']}.")
+            if facts["avoids"]:
+                parts.append(f"Avoids {', '.join(facts['avoids'])}.")
+            if facts["scenario_delay_h"] > 0:
+                parts.append(f"Includes {facts['scenario_delay_h']}h announced scenario delay.")
             c["explanation"] = " ".join(parts)

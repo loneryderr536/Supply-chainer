@@ -12,7 +12,7 @@ map, explains every number, monitors chosen routes and raises alerts when a new 
 <img alt="Python 3.11" src="https://img.shields.io/badge/python-3.11-blue">
 <img alt="FastAPI" src="https://img.shields.io/badge/API-FastAPI-009688">
 <img alt="React" src="https://img.shields.io/badge/UI-React%2018%20%2B%20Vite-61dafb">
-<img alt="Tests" src="https://img.shields.io/badge/tests-80%20passing-brightgreen">
+<img alt="Tests" src="https://img.shields.io/badge/tests-103%20passing-brightgreen">
 <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-lightgrey">
 </p>
 
@@ -45,9 +45,12 @@ map, explains every number, monitors chosen routes and raises alerts when a new 
 | **Three decision personas** | FASTEST plans on the median, BALANCED on p85, SAFEST on p95 plus risk-hours, so the options diverge for a principled reason when uncertainty grows. |
 | **Explainable** | The riskiest leg of every route gets an exact Shapley attribution ("news severity added +122h"). Every ETA, cost and risk figure is traceable in the audit panel. |
 | **Disruption scenarios** | Six scripted scenarios (Suez blockage, Red Sea escalation, Hormuz closure, LA port strike, Chennai flooding, Dubai air congestion). Closures are impassable and come with a *hold vs. reroute* comparison. |
-| **Live intelligence** | Google News headlines for chokepoints and major hubs, scored by a contrastive NLP model and filtered by mode (CARF). Analysts can file, confirm or dismiss reports. |
+| **Live intelligence** | Google News headlines scored by a contrastive NLP model and filtered by mode (CARF), plus two structured feeds: **GDACS** disaster alerts (cyclones, earthquakes, floods, volcanoes) matched to hubs by distance, and **AIS** vessel tracking that detects congestion at chokepoints. Analysts can file, confirm or dismiss reports. |
+| **Cargo value economics** | Give a cargo value and BALANCED adds inventory carrying cost for every hour in transit, so high-value freight shifts to faster modes. Every option reports freight, carrying cost and total landed cost. |
+| **Boardroom PDF** | A one-click report with the recommendation, hold-vs-reroute verdict, options table, ETA bands, a route map, leg detail and the Shapley explanation, in any supported currency. |
+| **Multi-language, multi-currency** | Dashboard in English, हिन्दी, Español and 中文; costs in USD, EUR, GBP, INR, CNY, JPY, AED or SGD at live exchange rates (with labelled offline fallback). |
 | **Route monitoring** | Watch any recommended route. Activating a scenario or receiving new intel re-prices it and pushes an alert with a concrete alternative (WebSocket + optional webhook). |
-| **Persistence & exports** | SQLite route history, watches and alerts; CSV audit trail and a TMS/ERP-ready shipment-plan JSON. |
+| **Persistence & exports** | Route history, watches, alerts and live scenarios survive restarts, stored in SQLite by default or PostgreSQL via `DATABASE_URL`. CSV audit trail and a TMS/ERP-ready shipment-plan JSON. |
 | **Works offline** | The map ships its own coastline and live news degrades gracefully, which suits demos on unreliable Wi-Fi. |
 
 ---
@@ -81,11 +84,14 @@ flowchart LR
     B --> C[Multimodal graph<br/>ocean basins + chokepoint gates]
     S[Scenarios<br/>what-if or live] --> W
     N[Live news and analyst reports] --> G[Event + location gates] --> P[Contrastive NLP<br/>severity + threat type] --> F[CARF<br/>mode relevance] --> W
+    GD[GDACS disaster alerts] --> W
+    AIS[AIS vessel positions] --> W
     M[Quantile ML<br/>p50 / p85 / p95 per leg] --> W
     C --> W[Persona weighting<br/>FASTEST / BALANCED / SAFEST]
     W --> D[Dijkstra x 3]
     D --> R[Routes + ETA band + audit trace<br/>+ Shapley attribution + hold option]
-    R --> H[(SQLite: history,<br/>watches, alerts)]
+    R --> H[(SQLite or Postgres:<br/>history, watches, alerts,<br/>live scenarios)]
+    R --> PDF[Boardroom PDF / CSV / TMS JSON]
     H --> AL[Monitoring and alerts<br/>WebSocket / webhook]
 ```
 
@@ -105,6 +111,15 @@ the routes they should.
   counts at 50% until an analyst confirms it.
 * **Analyst reports** are scored the same way at full weight, which also makes the pipeline easy to
   demonstrate without internet access.
+* **GDACS** (UN/EC Global Disaster Alert and Coordination System) is polled every 30 minutes. Each
+  current event is matched to hubs within a hazard-specific radius (cyclone 600 km, earthquake 300 km,
+  flood 150 km…). Threat comes from the alert level (Green/Orange/Red) and is applied only to the
+  modes that hazard disrupts: a flood hits road and rail, volcanic ash hits air.
+* **AIS** (via [aisstream.io](https://aisstream.io), free API key) streams vessel positions around
+  eight chokepoints. When an unusually large share of ships near a strait is anchored or holding
+  (<0.5 knots) over a two-hour window, it is reported as congestion.
+* All sources are stored per hub and per source and merged per mode. Scenarios and analyst reports
+  count in full, GDACS in full, AIS at 75%, and unverified headlines at 50%.
 
 ### 3. NLP and CARF
 A `SentenceTransformer` (`all-MiniLM-L6-v2`) compares each sentence with 16 historical disaster
@@ -127,8 +142,12 @@ pre-computed into lookup tables, so routing can query them inside Dijkstra.
 | Persona | Delay quantile | Edge weight |
 |---|---|---|
 | FASTEST | p50 | time + delay |
-| BALANCED | p85 | 0.3 · time / priority + 0.5 · cost / 150 + 8 · threat |
+| BALANCED | p85 | 0.3 · time / priority + 0.5 · (freight + carrying cost) / 150 + 8 · threat |
 | SAFEST | p95 | time + delay + 240 h × threat |
+
+Carrying cost per hour = cargo value × annual carrying rate ÷ 8,760 (default rate 25%/yr). With a
+cargo value of $0 BALANCED behaves as before; on Shanghai → Rotterdam it switches from sea to air
+somewhere between $1M and $5M of cargo.
 
 `STRICT` mode restricts a route to the chosen mode plus first- and last-mile road; `PREFERRED`
 makes other modes 1.5× more expensive. Cargo restrictions apply automatically (perishable: no sea,
@@ -153,6 +172,16 @@ uvicorn backend.main:app --port 8000
 
 The first start downloads the `all-MiniLM-L6-v2` weights and takes 10–20 seconds to warm up.
 Interactive API docs are at http://127.0.0.1:8000/docs.
+
+To use PostgreSQL instead of the default SQLite file, create a database and point the API at it;
+the tables are created automatically:
+
+```bash
+DATABASE_URL=postgresql://user:password@localhost:5432/supplychainer uvicorn backend.main:app --port 8000
+```
+
+To enable live AIS vessel tracking, get a free key at [aisstream.io](https://aisstream.io) and start
+the API with `AISSTREAM_API_KEY=<your key>`.
 
 ### Frontend (React + Vite)
 
@@ -185,7 +214,11 @@ python Code/precompute_nlp.py        # NLP anchor embeddings
 |---|---|---|
 | `LIVE_INTEL` | `true` | Scan Google News at startup and on a timer. Set `false` for offline or deterministic runs. |
 | `INTEL_REFRESH_S` | `900` | Seconds between live news scans. |
-| `SUPPLYCHAINER_DB` | `backend/data/supplychainer.db` | SQLite file for history, watches and alerts. |
+| `DATABASE_URL` | *(unset)* | `postgresql://…` to store everything in PostgreSQL instead of SQLite. |
+| `SUPPLYCHAINER_DB` | `backend/data/supplychainer.db` | SQLite file for history, watches, alerts and live scenarios. |
+| `AISSTREAM_API_KEY` | *(unset)* | Enables live AIS chokepoint congestion (free key from aisstream.io). |
+| `FEED_REFRESH_S` | `1800` | Seconds between GDACS refreshes. |
+| `LIVE_FX` | `true` | Fetch live exchange rates; `false` uses the labelled offline reference rates. |
 | `ALERT_WEBHOOK_URL` | *(unset)* | If set, every route alert is POSTed here as JSON (`supplychainer.route_alert.v1`). |
 | `DEMO_MODE` | `false` | Skip model warm-up and use deterministic delay priors. |
 
@@ -193,14 +226,18 @@ python Code/precompute_nlp.py        # NLP anchor embeddings
 
 ## Using the dashboard
 
+0. **Personalise:** pick a language and currency in the header; both are remembered.
 1. **Plan:** enter an origin and destination (city, hub name or code such as `PORT-SHANGHAI`),
-   choose a mode, policy, cargo type and priority, and optionally a *what-if* scenario.
+   choose a mode, policy, cargo type and priority, optionally a cargo value, and optionally a
+   *what-if* scenario.
 2. **Compare:** each card shows the planned ETA, the p50/p85/p95 band, cost, risk, a plain-language
    explanation built only from real numbers, and the legs. Click a card to highlight it on the map.
 3. **Audit:** the *Audit* tab breaks down ETA, the ML delay buffer, cost and risk sources, plus a
-   Shapley chart of why the riskiest leg is slow. Export the run as CSV or TMS JSON.
+   Shapley chart of why the riskiest leg is slow. Download the boardroom PDF, the CSV audit trail
+   or the TMS JSON.
 4. **Monitor:** press **Monitor** on a card. In *Live Ops*, activate a scenario or file an intel
-   report and any affected route raises an alert with a suggested reroute.
+   report and any affected route raises an alert with a suggested reroute. Live Ops also shows the
+   GDACS and AIS feed status and every intel signal with its source.
 5. **Review:** the *History* tab lists every saved run and reopens it.
 
 The **Supplier Intelligence** view ranks suppliers by cost, lead time and disruption-adjusted
@@ -216,13 +253,16 @@ Full schema at `/docs`. Main endpoints:
 |---|---|
 | `POST /api/recommend` | Route options; saved to history and returns a `run_id` |
 | `GET /api/history` · `GET /api/runs/{id}` | Saved runs |
+| `GET /api/runs/{id}/report.pdf?currency=EUR` | Boardroom PDF report |
 | `GET /api/runs/{id}/export.csv` | Leg-level audit trail |
 | `GET /api/runs/{id}/export.json` | Shipment plan for TMS/ERP (`supplychainer.shipment_plan.v1`) |
 | `GET /api/scenarios` | Scenarios and whether each is live |
 | `POST /api/scenarios/{id}/activate` · `/deactivate` | Change the live picture; re-checks monitored routes |
 | `POST /api/watches` · `GET /api/watches` · `DELETE /api/watches/{id}` | Route monitoring |
 | `GET /api/alerts` · `POST /api/alerts/{id}/ack` | Alerts (also pushed on `/ws`) |
-| `GET /api/intel` · `POST /api/intel/scan` · `POST /api/intel/report` · `DELETE /api/intel/{hub}` | Live and analyst intelligence |
+| `GET /api/intel` · `POST /api/intel/scan` · `POST /api/intel/report` · `DELETE /api/intel/{hub}?source=` | Live and analyst intelligence |
+| `GET /api/feeds` · `POST /api/feeds/gdacs/refresh` | GDACS and AIS feed status |
+| `GET /api/fx` | Exchange rates used for display |
 | `GET /api/network` · `GET /api/hubs` · `GET /api/hubs/search?q=` · `GET /api/cities` | Registry and map data |
 | `POST /api/suppliers` | Supplier ranking and procurement advice |
 | `GET /api/status` · `WS /ws` | Engine health; status stream and alert push |
@@ -233,7 +273,8 @@ Full schema at `/docs`. Main endpoints:
 curl -s localhost:8000/api/recommend -H 'content-type: application/json' -d '{
   "source": "Shanghai", "destination": "Rotterdam",
   "transport_preference": "sea", "routing_policy": "STRICT",
-  "cargo_type": "general", "priority": "normal", "scenario": "SUEZ_BLOCK"
+  "cargo_type": "general", "priority": "normal", "scenario": "SUEZ_BLOCK",
+  "cargo_value_usd": 0
 }'
 ```
 
@@ -273,7 +314,8 @@ Abbreviated response (captured with `LIVE_INTEL=false`, since live headlines cha
 pytest
 ```
 
-The suite has 80 tests and runs in about 25 seconds once the models are cached. The tests check
+The suite has 103 tests and runs in about 25 seconds once the models are cached. Two storage tests
+also run against PostgreSQL when `TEST_DATABASE_URL` is set (otherwise they are skipped). The tests check
 outcomes, not just the absence of crashes:
 
 * **Intelligence:** disasters score above 0.5 and safe text scores 0. CARF is enforced for all four
@@ -284,6 +326,10 @@ outcomes, not just the absence of crashes:
   delays count once per hub. What-ifs never leak into shared state. Totals match the sum of the legs.
 * **API:** history, CSV and TMS exports, alert raising and de-duplication, intel reports feeding
   routing, and supplier what-ifs staying request-scoped.
+* **New features:** high-value cargo switching BALANCED to air and landed-cost arithmetic; removed
+  links staying out of the graph; GDACS parsing and hazard matching; AIS congestion from synthetic
+  position reports; per-source merging; FX formatting; PDF generation in several currencies; and
+  storage plus live-scenario persistence on SQLite and PostgreSQL.
 
 ---
 
@@ -296,6 +342,8 @@ outcomes, not just the absence of crashes:
 │   ├── data/
 │   │   ├── canonical_hubs.json        440 hubs with modes, coordinates and connections
 │   │   ├── canonical_locations.json   city -> hub per mode
+│   │   ├── link_corrections.json      impossible land links removed from the graph, with reasons
+│   │   ├── land-110m.json             Natural Earth coastline for the PDF map
 │   │   └── suppliers.json             sample suppliers
 │   └── engine/
 │       ├── multimodal_network.py      builds the mode-split graph
@@ -306,7 +354,10 @@ outcomes, not just the absence of crashes:
 │       ├── news_ingestion.py          Google News ingestion and the intel monitor
 │       ├── scenario_manager.py        scenarios and the live picture
 │       ├── monitoring.py              watches, alerts, CSV / TMS exports
-│       ├── store.py                   SQLite persistence
+│       ├── event_feeds.py             GDACS disaster feed and AIS chokepoint monitor
+│       ├── report_pdf.py              boardroom PDF report
+│       ├── fx.py                      exchange rates for display
+│       ├── store.py                   SQLite / PostgreSQL persistence
 │       └── supplier_scorer.py         supplier ranking and procurement advice
 ├── Execution/                     trained artifacts: quantile models, encoders, NLP anchors, calibration
 ├── Code/                          dataset builder, training and anchor scripts
@@ -314,7 +365,8 @@ outcomes, not just the absence of crashes:
 │   ├── App.jsx                    view switcher and WebSocket
 │   ├── RouteRecommender.jsx       main dashboard
 │   ├── RouteMap.jsx               Leaflet map with offline coastline
-│   ├── LiveOps.jsx                scenarios, alerts, watches, intel
+│   ├── LiveOps.jsx                scenarios, alerts, watches, feeds, intel
+│   ├── i18n.jsx                   translations (en/hi/es/zh), currency formatting
 │   ├── SupplierIntelligence.jsx   supplier view
 │   └── api.js                     fetch helpers and colours
 ├── tests/                         pytest suite
@@ -347,6 +399,7 @@ below was found by checking outputs against real scenarios.
 | Request options | Mode preference, `PREFERRED`, cargo type and priority ignored | All honoured |
 | Explanations | Invented figures ("reduces cost by 396%") | Built only from real candidate numbers |
 | Registry | Two facilities shared `HUB-CHICAGO`; `AIR-CHENNAI` referenced but missing | Split into `HUB-ELKGROVE`; hub added; duplicate IDs rejected |
+| Impossible land links | Rail across the Red Sea, Persian Gulf, Mediterranean and Taiwan Strait, a non-existent Djibouti–Port Sudan railway, and an automatic road across the Strait of Gibraltar; routes used them to dodge scenarios | 26 links removed via `link_corrections.json`, each with its reason |
 | Live news | Never called; process-wide socket timeout | Wired in with per-request timeouts, gates and confidence weighting |
 | Supplier risk | "Risk" column was `1 − decision score`, flagging cheap but slow suppliers | Disruption-adjusted unreliability |
 | Tests | Scratch checks passed while the bugs were present | 80-test pytest suite with absolute assertions |
@@ -362,7 +415,11 @@ below was found by checking outputs against real scenarios.
   headlines still score weakly against the current anchor set.
 * **Geometry:** sea distances are great-circle distances between waypoints, not real sailing lanes.
 * **Economics:** cargo value and inventory carrying cost are not modelled yet.
-* **State:** activated scenarios live in memory; history, watches and alerts are persisted.
+* **AIS:** live congestion needs an aisstream.io key. The detection logic is tested on synthetic
+  position reports, but its thresholds (15 vessels, 35% normal holding share) have not been
+  calibrated against real traffic.
+* **Translations:** the dashboard is translated. Alert messages, backend error text and the PDF
+  report are English; the PDF uses your chosen currency.
 * **Legacy:** `BenchmarkCharts.jsx` and `benchmarks/decision_superiority.py` are pre-existing and
   not wired to the current engine.
 
@@ -381,12 +438,12 @@ below was found by checking outputs against real scenarios.
 - [x] Persistent storage (SQLite)
 - [x] Automated tests
 - [x] Webhook and TMS/ERP export format
-- [ ] AIS vessel tracking and structured event feeds
+- [x] AIS vessel tracking and structured event feeds (GDACS)
+- [x] PDF boardroom report
+- [x] Cargo value and inventory carrying cost in BALANCED
+- [x] Multi-currency and multi-language UI
+- [x] Postgres and persisted live scenarios
 - [ ] Authentication, multi-tenancy and rate limiting
-- [ ] PDF boardroom report
-- [ ] Cargo value and inventory carrying cost in BALANCED
-- [ ] Multi-currency and multi-language UI
-- [ ] Postgres and persisted live scenarios
 
 ---
 
@@ -394,9 +451,9 @@ below was found by checking outputs against real scenarios.
 
 | Layer | Tools |
 |---|---|
-| Backend | Python 3.11, FastAPI, Uvicorn, NetworkX, SQLite |
+| Backend | Python 3.11, FastAPI, Uvicorn, NetworkX, SQLite / PostgreSQL (psycopg), ReportLab |
 | ML / NLP | scikit-learn (quantile gradient boosting), sentence-transformers, PyTorch |
-| Data | pandas, NumPy, feedparser, requests |
+| Data | pandas, NumPy, feedparser, requests; GDACS, aisstream.io, open.er-api.com |
 | Frontend | React 18, Vite 5, Leaflet 1.9, topojson / world-atlas, lucide-react, Recharts |
 | Testing | pytest, FastAPI TestClient |
 
@@ -406,7 +463,8 @@ below was found by checking outputs against real scenarios.
 
 Built for the **TatHack** prelim challenge, in association with Arvind and the TatHack team.
 Delay distributions are anchored to public statistics from UNCTAD, the World Bank and the US
-Surface Transportation Board. Map data © OpenStreetMap contributors, © CARTO, and Natural Earth
-(via `world-atlas`).
+Surface Transportation Board. Disaster alerts from GDACS (UN/EC); vessel positions from
+aisstream.io; exchange rates from open.er-api.com. Map data © OpenStreetMap contributors, © CARTO,
+and Natural Earth (via `world-atlas`).
 
 Licensed under the Apache License 2.0; see [LICENSE](LICENSE).

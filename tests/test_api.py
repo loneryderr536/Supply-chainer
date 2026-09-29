@@ -11,6 +11,7 @@ import pytest
 def client(tmp_path_factory):
     os.environ["SUPPLYCHAINER_DB"] = str(tmp_path_factory.mktemp("db") / "test.db")
     os.environ["LIVE_INTEL"] = "false"  # no network in tests
+    os.environ["LIVE_FX"] = "false"
     from fastapi.testclient import TestClient
     from backend import main
 
@@ -26,6 +27,8 @@ def client(tmp_path_factory):
 def reset(client):
     _, main = client
     main.scenario_mgr.active_scenario_ids.clear()
+    for sid in main.store.load_live_scenarios():
+        main.store.set_live_scenario(sid, False)
     main.intel.clear()
     yield
 
@@ -128,3 +131,25 @@ def test_supplier_what_if_does_not_leak_into_routing(client):
     c.post("/api/suppliers", json={"category": "Electronics", "scenario": "SUEZ_BLOCK"})
     assert main.scenario_mgr.active_scenario_ids == []
     assert recommend(c)["applied_scenarios"] == []
+
+
+def test_live_scenario_survives_restart(client):
+    c, main = client
+    c.post("/api/scenarios/HORMUZ_CLOSURE/activate")
+    from backend.engine.store import Store
+    assert "HORMUZ_CLOSURE" in Store(path=main.store.path, url="").load_live_scenarios()
+    c.post("/api/scenarios/HORMUZ_CLOSURE/deactivate")
+    assert "HORMUZ_CLOSURE" not in Store(path=main.store.path, url="").load_live_scenarios()
+
+
+def test_pdf_fx_and_feed_endpoints(client):
+    c, _ = client
+    run_id = recommend(c, cargo_value_usd=1_000_000)["run_id"]
+    r = c.get(f"/api/runs/{run_id}/report.pdf?currency=eur")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf" and r.content.startswith(b"%PDF")
+    assert c.get(f"/api/runs/{run_id}/report.pdf?currency=XYZ").status_code == 400
+    plan = c.get(f"/api/runs/{run_id}/export.json").json()["plans"][0]
+    assert plan["landed_cost_usd"] > plan["total_cost_usd"]
+    assert c.get("/api/fx").json()["rates"]["USD"] == 1.0
+    feeds = {f["source"]: f for f in c.get("/api/feeds").json()["feeds"]}
+    assert set(feeds) == {"GDACS", "AIS"}

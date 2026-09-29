@@ -39,6 +39,18 @@ def _travel_time(dist, mode):
     
     return dist / speed
 
+def load_link_corrections():
+    """(hub_a, hub_b, mode) triples that must never be linked (see data/link_corrections.json)."""
+    path = os.path.join(os.path.dirname(__file__), '..', 'data', 'link_corrections.json')
+    removed = set()
+    if os.path.exists(path):
+        with open(path) as f:
+            for r in json.load(f).get("remove", []):
+                for m in r["modes"]:
+                    removed.add((frozenset((r["a"], r["b"])), m))
+    return removed
+
+
 def load_canonical_hubs():
     path = os.path.join(os.path.dirname(__file__), '..', 'data', 'canonical_hubs.json')
     if os.path.exists(path):
@@ -115,7 +127,11 @@ def create_multimodal_network():
     # Physical links (roads, rail lines, air lanes) are two-way: the registry only lists each
     # link once, so without the reverse edge half the network was unreachable
     # (e.g. nothing could ever sail *into* CHOKE-CAPEGOOD).
+    removed_links = load_link_corrections()
+
     def add_transit(u_base, v_base, mode):
+        if (frozenset((u_base, v_base)), mode) in removed_links:
+            return
         u_vnode, v_vnode = f"{u_base}:{mode}", f"{v_base}:{mode}"
         if not (G.has_node(u_vnode) and G.has_node(v_vnode)) or G.has_edge(u_vnode, v_vnode):
             return
@@ -150,7 +166,7 @@ def create_multimodal_network():
         for h2 in hubs[i+1:]:
             if "road" not in h2["modes"]: continue
             d = _haversine(h1["lat"], h1["lon"], h2["lat"], h2["lon"])
-            if d < 200:
+            if d < 200 and (frozenset((h1["id"], h2["id"])), "road") not in removed_links:
                 u, v = f"{h1['id']}:road", f"{h2['id']}:road"
                 if G.has_node(u) and G.has_node(v) and not G.has_edge(u, v):
                     t = _travel_time(d, "road")

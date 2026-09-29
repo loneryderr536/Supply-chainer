@@ -425,3 +425,9 @@ body {
 }
 .intel-row { display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid #1e293b; font-size: 0.75rem; }
 .intel-src { margin-left: 6px; font-size: 0.6rem; font-weight: 800; color: #eab308; border: 1px solid rgba(234, 179, 8, 0.4); border-radius: 4px; padding: 0 4px; }
+.header-select { background: #0f172a; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 9999px; padding: 0.4rem 0.75rem; font-family: inherit; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
+.header-select:focus { outline: none; border-color: var(--accent-blue); }
+.feed-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #1e293b; }
+.src-GDACS { color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); }
+.src-AIS { color: #a78bfa; border-color: rgba(167, 139, 250, 0.4); }
+.src-ANALYST { color: #34d399; border-color: rgba(52, 211, 153, 0.4); }

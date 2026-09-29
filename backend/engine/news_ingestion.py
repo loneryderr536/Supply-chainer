@@ -83,14 +83,16 @@ EVENT_TERMS = re.compile(
 
 # Unverified headlines influence routing at reduced weight until an analyst confirms them
 # (an analyst report on the same hub replaces the entry at full weight).
-SOURCE_CONFIDENCE = {"LIVE_NEWS": 0.5, "ANALYST": 1.0}
+# Structured feeds are authoritative (GDACS) or instrument-derived but heuristic (AIS congestion).
+SOURCE_CONFIDENCE = {"LIVE_NEWS": 0.5, "ANALYST": 1.0, "GDACS": 1.0, "AIS": 0.75}
 
 
 class IntelMonitor:
     """
-    Keeps a hub -> threat picture from live headlines (and analyst reports), scored by the
-    contrastive NLP engine and filtered per transport mode by CARF. The route recommender reads
-    this picture on every request.
+    Keeps a hub -> threat picture from several sources: live headlines and analyst reports
+    (scored by the contrastive NLP engine and filtered per mode by CARF) and structured feeds
+    (GDACS disaster alerts, AIS vessel congestion). Signals are stored per (hub, source) and
+    merged per hub; the route recommender reads the merged picture on every request.
     """
 
     def __init__(self, hubs: List[dict], nlp, carf, ingestor: Optional[DynamicNewsIngestor] = None,
@@ -101,7 +103,7 @@ class IntelMonitor:
         self.ingestor = ingestor or DynamicNewsIngestor()
         self.ttl_s = ttl_s
         self._lock = threading.Lock()
-        self._picture: Dict[str, Dict[str, Any]] = {}
+        self._picture: Dict[tuple, Dict[str, Any]] = {}  # (hub_id, source) -> entry
         self.last_scan: Optional[Dict[str, Any]] = None
         ranked = sorted(hubs, key=lambda h: (h["type"] != "choke_point", -h.get("importance", 0)))
         self.watchlist = [h["id"] for h in ranked if h["type"] == "choke_point" or h.get("importance", 0) >= 9][:max_hubs]
@@ -166,10 +168,12 @@ class IntelMonitor:
             raise RuntimeError("NLP engine is not ready")
         entry = self._score(hub_id, [{"title": text}], source)
         with self._lock:
+            # An analyst's call on a hub supersedes unverified headlines about it.
+            self._picture.pop((hub_id, "LIVE_NEWS"), None)
             if entry:
-                self._picture[hub_id] = entry
+                self._picture[(hub_id, source)] = entry
             else:
-                self._picture.pop(hub_id, None)
+                self._picture.pop((hub_id, source), None)
         if entry:
             return entry
         rejected = self.gate(self.hubs[hub_id], text, require_location=False)
@@ -177,12 +181,20 @@ class IntelMonitor:
                 "note": f"No threat recorded: {rejected}." if rejected else
                         "No threat recorded: scored below the noise floor or filtered by CARF."}
 
-    def clear(self, hub_id: Optional[str] = None):
+    def clear(self, hub_id: Optional[str] = None, source: Optional[str] = None):
         with self._lock:
-            if hub_id:
-                self._picture.pop(hub_id, None)
-            else:
-                self._picture.clear()
+            for key in list(self._picture):
+                if (hub_id is None or key[0] == hub_id) and (source is None or key[1] == source):
+                    self._picture.pop(key)
+
+    def replace_source(self, source: str, entries: Dict[str, Dict[str, Any]]):
+        """Swap in a structured feed's latest picture (hub_id -> entry) for that source."""
+        with self._lock:
+            for key in [k for k in self._picture if k[1] == source]:
+                self._picture.pop(key)
+            for hub_id, entry in entries.items():
+                if hub_id in self.hubs:
+                    self._picture[(hub_id, source)] = entry
 
     def scan(self, hub_ids: Optional[List[str]] = None, workers: int = 8) -> Dict[str, Any]:
         """Fetch + score live headlines for the watchlist (or the given hubs)."""
@@ -197,16 +209,39 @@ class IntelMonitor:
         with self._lock:
             for hub_id, items in reachable:
                 entry = self._score(hub_id, items, "LIVE_NEWS")
-                if entry:
-                    self._picture[hub_id] = entry
+                if entry and (hub_id, "ANALYST") not in self._picture:
+                    self._picture[(hub_id, "LIVE_NEWS")] = entry
                     threats += 1
-                elif self._picture.get(hub_id, {}).get("source") == "LIVE_NEWS":
-                    self._picture.pop(hub_id)
+                else:
+                    self._picture.pop((hub_id, "LIVE_NEWS"), None)
         self.last_scan = {"at": time.time(), "status": "ok" if reachable else "offline",
                           "hubs_scanned": len(targets), "hubs_reachable": len(reachable), "threats": threats}
         return self.last_scan
 
-    def hub_threats(self) -> Dict[str, Dict[str, Any]]:
+    def entries(self) -> List[Dict[str, Any]]:
+        """Every fresh signal, one per (hub, source)."""
         now = time.time()
         with self._lock:
-            return {h: e for h, e in self._picture.items() if now - e["observed_at"] < self.ttl_s}
+            return [e for e in self._picture.values() if now - e["observed_at"] < self.ttl_s]
+
+    def hub_threats(self) -> Dict[str, Dict[str, Any]]:
+        """Merged per hub: per-mode max across sources, described by the strongest signal."""
+        merged: Dict[str, Dict[str, Any]] = {}
+        for e in self.entries():
+            h = e["hub_id"]
+            strength = max(e["threat_by_mode"].values(), default=0.0)
+            cur = merged.get(h)
+            if cur is None:
+                merged[h] = {**e, "threat_by_mode": dict(e["threat_by_mode"]), "sources": [e["source"]],
+                             "_strength": strength}
+                continue
+            for m, v in e["threat_by_mode"].items():
+                cur["threat_by_mode"][m] = max(cur["threat_by_mode"].get(m, 0.0), v)
+            cur["sources"].append(e["source"])
+            if strength > cur["_strength"]:
+                for k in ("headline", "link", "category", "source", "score", "confidence", "published"):
+                    cur[k] = e.get(k)
+                cur["_strength"] = strength
+        for v in merged.values():
+            v.pop("_strength", None)
+        return merged
