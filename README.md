@@ -25,6 +25,51 @@ It then tells you which route to take, how long it will *really* take, and why.
 
 ---
 
+## Screenshots
+
+All screenshots are from the running app (see the [`screenshots/`](screenshots) folder).
+
+<table>
+  <tr>
+    <td colspan="3" align="center">
+      <img src="screenshots/01_suez_reroute.png" width="100%" alt="Suez Canal blocked: ships reroute around Africa"><br>
+      <b>Suez Canal blocked</b>: ships reroute around Africa, and the app shows that waiting would be 212 hours slower
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <img src="screenshots/02_audit_explainability.png" width="100%" alt="Audit panel"><br>
+      <b>Explains every number</b>, including why a leg is slow
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="screenshots/04_monitoring_alert.png" width="100%" alt="Route alert"><br>
+      <b>Instant alert</b> when a disruption hits a saved route
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="screenshots/05_live_intel.png" width="100%" alt="Live intel"><br>
+      <b>Live data</b>: GDACS disaster alerts and news
+    </td>
+  </tr>
+  <tr>
+    <td colspan="3" align="center">
+      <img src="screenshots/06_hindi_inr.png" width="100%" alt="Hindi interface with rupees"><br>
+      <b>Your language, your currency</b>: the full dashboard in Hindi with prices in rupees
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" width="50%" align="center" valign="top">
+      <img src="screenshots/07_pdf_report.png" width="100%" alt="Boardroom PDF report"><br>
+      <b>One-click boardroom PDF</b>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="screenshots/03_cargo_value.png" width="100%" alt="Cargo value comparison"><br>
+      <b>Cargo value counts</b>: for $5M of goods, sea is $57k cheaper overall than air
+    </td>
+  </tr>
+</table>
+
+---
+
 ## How it works
 
 1. **You ask for a route**, for example Shanghai → Rotterdam by sea.

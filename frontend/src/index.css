@@ -431,3 +431,6 @@ body {
 .src-GDACS { color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); }
 .src-AIS { color: #a78bfa; border-color: rgba(167, 139, 250, 0.4); }
 .src-ANALYST { color: #34d399; border-color: rgba(52, 211, 153, 0.4); }
+/* Let selects shrink inside grid columns instead of overflowing (long labels, e.g. in Hindi). */
+.sc-input-group { min-width: 0; }
+.sc-select, .sc-input { width: 100%; min-width: 0; text-overflow: ellipsis; }
