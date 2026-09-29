@@ -190,7 +190,7 @@ The original prototype ran without errors but gave wrong answers. The main probl
 
 ## Demo video
 
-▶️ **Watch the demo:** [VIDEO LINK HERE](#)
+▶️ **Watch the demo:** [VIDEO LINK HERE](https://youtu.be/sAbncw55d2Q)
 
 ---
 
