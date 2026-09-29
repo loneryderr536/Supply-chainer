@@ -5,3 +5,6 @@ __pycache__/
 venv/
 env/
 .env
+# local runtime state
+backend/data/supplychainer.db*
+.venv/

@@ -34,7 +34,9 @@ def test_nlp_reality():
         score_safe = nlp.get_semantic_score("Skies are blue and traffic is flowing perfectly through the terminal.")
         print(f"SUCCESS: Real NLP Score for safe text: {score_safe:.3f}")
         
-        if score > score_safe:
+        # A relative check (score > score_safe) passed even when the disaster was zeroed out and the
+        # safe text went negative. Require an absolute separation instead.
+        if score >= 0.5 and score_safe == 0.0:
             print("VERIFIED: Contrastive NLP distinguishes threat from safety.")
         else:
             print("CRITICAL: NLP failed to distinguish signals.")

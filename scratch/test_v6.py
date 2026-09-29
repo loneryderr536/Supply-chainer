@@ -38,6 +38,9 @@ print(json.dumps(res_normal, indent=2))
 # Verify
 assert "CHOKE-SUEZ" in [l["to"] for l in res_normal["recommendations"][0]["legs"]], "Normal conditions must go through Suez!"
 assert len(res_scenario["recommendations"]) > 0, "Scenario should have recommendations."
+for rec in res_scenario["recommendations"]:
+    assert "CHOKE-SUEZ" not in [l["to"] for l in rec["legs"]], "SUEZ_BLOCK must not route through the blocked canal!"
+    assert "CHOKE-CAPEGOOD" in [l["to"] for l in rec["legs"]], "SUEZ_BLOCK should divert via the Cape of Good Hope"
 assert "SUEZ_BLOCK" in res_scenario["active_scenario"] or "Suez Canal Blockage" in res_scenario["active_scenario"], "Scenario did not activate!"
 
 print("\n--- TEST: FAILURES CONSOLIDATION ---")

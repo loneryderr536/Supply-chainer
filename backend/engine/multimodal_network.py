@@ -4,6 +4,8 @@ import os
 import math
 from typing import List, Dict, Any
 
+from .sea_lanes import build_sea_lanes
+
 MODE_PROFILES = {
     "road": {"speed": 80, "cost_per_km": 1.2, "cargo_restrictions": ["oversize_heavy"]},
     "rail": {"speed": 60, "cost_per_km": 0.5, "cargo_restrictions": []},
@@ -61,6 +63,12 @@ def create_multimodal_network():
     G = nx.DiGraph()
     hubs = load_canonical_hubs()
     hub_lookup = {h["id"]: h for h in hubs}
+    if len(hub_lookup) != len(hubs):
+        # Two facilities sharing an ID get silently merged into one node; refuse to build that graph.
+        seen, dupes = set(), set()
+        for h in hubs:
+            (dupes if h["id"] in seen else seen).add(h["id"])
+        raise ValueError(f"Duplicate hub IDs in canonical_hubs.json: {sorted(dupes)}")
 
     # 1. Add Mode-Specific Virtual Nodes
     # Each hub H with modes M gets nodes H:m1, H:m2...
@@ -104,23 +112,37 @@ def create_multimodal_network():
                            cost=profile["cost"], risk=profile["risk"])
 
     # 3. Add Strategic Intra-Mode Transit Edges
+    # Physical links (roads, rail lines, air lanes) are two-way: the registry only lists each
+    # link once, so without the reverse edge half the network was unreachable
+    # (e.g. nothing could ever sail *into* CHOKE-CAPEGOOD).
+    def add_transit(u_base, v_base, mode):
+        u_vnode, v_vnode = f"{u_base}:{mode}", f"{v_base}:{mode}"
+        if not (G.has_node(u_vnode) and G.has_node(v_vnode)) or G.has_edge(u_vnode, v_vnode):
+            return
+        h1, h2 = hub_lookup[u_base], hub_lookup[v_base]
+        dist = _haversine(h1["lat"], h1["lon"], h2["lat"], h2["lon"])
+        attrs = dict(baseline_time=_travel_time(dist, mode), distance=round(dist, 1),
+                     transport_mode=mode, type="transit", cost=dist * MODE_PROFILES[mode]["cost_per_km"])
+        G.add_edge(u_vnode, v_vnode, **attrs)
+        G.add_edge(v_vnode, u_vnode, **attrs)
+
+    dangling = set()
     for hub in hubs:
-        u_base = hub["id"]
         for conn in hub.get("connections", []):
-            v_base = conn["to"]
-            mode = conn["mode"]
-            
-            u_vnode = f"{u_base}:{mode}"
-            v_vnode = f"{v_base}:{mode}"
-            
-            if G.has_node(u_vnode) and G.has_node(v_vnode):
-                h1, h2 = hub, hub_lookup[v_base]
-                dist = _haversine(h1["lat"], h1["lon"], h2["lat"], h2["lon"])
-                t = _travel_time(dist, mode)
-                cost = dist * MODE_PROFILES[mode]["cost_per_km"]
-                
-                G.add_edge(u_vnode, v_vnode, baseline_time=t, distance=round(dist, 1), 
-                           transport_mode=mode, type="transit", cost=cost)
+            if conn["to"] not in hub_lookup:
+                dangling.add(conn["to"])
+                continue
+            if conn["mode"] == "sea":
+                continue  # maritime lanes are built from the basin/chokepoint model below
+            add_transit(hub["id"], conn["to"], conn["mode"])
+    if dangling:
+        print(f"[NETWORK] Skipped connections to unknown hubs: {sorted(dangling)}")
+
+    sea_links, basins = build_sea_lanes(hubs)
+    for a, b in sea_links:
+        add_transit(a, b, "sea")
+    for hub_id, basin in basins.items():
+        G.nodes[f"{hub_id}:sea"]["basin"] = basin
 
     # 4. Local Road Auto-wire (<200km)
     for i, h1 in enumerate(hubs):

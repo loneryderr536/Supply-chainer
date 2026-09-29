@@ -13292,7 +13292,7 @@
         "mode": "air"
       },
       {
-        "to": "HUB-CHICAGO",
+        "to": "HUB-ELKGROVE",
         "mode": "rail"
       },
       {
@@ -13302,7 +13302,7 @@
     ]
   },
   {
-    "id": "HUB-CHICAGO",
+    "id": "HUB-ELKGROVE",
     "display_name": "Elk Grove Village Logistics",
     "aliases": [
       "Elk Grove",
@@ -21818,6 +21818,25 @@
         "to": "RAIL-KHARAGPUR",
         "mode": "road"
       }
+    ]
+  },
+  {
+    "id": "AIR-CHENNAI",
+    "display_name": "Chennai International Airport",
+    "aliases": ["MAA", "Chennai Air"],
+    "type": "airport",
+    "modes": ["air", "road"],
+    "lat": 12.9941,
+    "lon": 80.1709,
+    "country": "India",
+    "importance": 8,
+    "parent_city": "Chennai",
+    "connections": [
+      {"to": "HUB-CHENNAI", "mode": "road"},
+      {"to": "PORT-CHENNAI", "mode": "road"},
+      {"to": "AIR-DUBAI", "mode": "air"},
+      {"to": "AIR-CHANGI", "mode": "air"},
+      {"to": "AIR-HONGKONG", "mode": "air"}
     ]
   }
 ]

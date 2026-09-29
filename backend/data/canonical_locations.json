@@ -175,8 +175,9 @@
   },
   "Chennai": {
     "sea": "PORT-CHENNAI",
-    "road": "PORT-CHENNAI",
-    "rail": "PORT-CHENNAI"
+    "air": "AIR-CHENNAI",
+    "rail": "RAIL-CHENNAI",
+    "road": "HUB-CHENNAI"
   },
   "Visakhapatnam": {
     "sea": "PORT-VIZAG",
@@ -1249,9 +1250,9 @@
     "air": "RAIL-WINNIPEG"
   },
   "Elk Grove Village Logistics": {
-    "road": "HUB-CHICAGO",
-    "rail": "HUB-CHICAGO",
-    "air": "HUB-CHICAGO"
+    "road": "HUB-ELKGROVE",
+    "rail": "HUB-ELKGROVE",
+    "air": "HUB-ELKGROVE"
   },
   "Klaipeda": {
     "sea": "PORT-KLAIPEDA",

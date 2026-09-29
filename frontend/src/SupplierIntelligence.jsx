@@ -132,10 +132,10 @@ export default function SupplierIntelligence({ onNavigate }) {
               </thead>
               <tbody>
                 {suppliers.map(s => {
-                  // decision_score (0-1) is the backend's ranking metric (cost + lead time +
-                  // disruption-adjusted reliability). We derive a 0-100% "risk" as its inverse
-                  // since the backend doesn't expose a separate risk_score field.
-                  const riskPct = Math.round((1 - s.decision_score) * 100);
+                  // Risk = 1 - disruption-adjusted reliability. (1 - decision_score) is NOT risk:
+                  // the decision score is mostly cost and lead time, so it flagged cheap-but-slow
+                  // suppliers as risky and hid the effect of active disruptions.
+                  const riskPct = Math.round((1 - s.audit_trace.scores.reliability) * 100);
                   return (
                     <tr key={s.id} style={{borderBottom: '1px solid #0f172a'}}>
                       <td style={{padding: '16px'}}>
@@ -143,7 +143,7 @@ export default function SupplierIntelligence({ onNavigate }) {
                         <div style={{fontSize: '11px', color: '#64748b'}}>{s.location_hub}</div>
                       </td>
                       <td style={{padding: '16px'}}>
-                        <div style={{display: 'flex', alignItems: 'center', gap: '6px', color: riskPct > 50 ? '#ef4444' : '#10b981'}}>
+                        <div style={{display: 'flex', alignItems: 'center', gap: '6px', color: riskPct > 20 ? '#ef4444' : '#10b981'}}>
                           <Activity size={14} /> {riskPct}%
                         </div>
                       </td>

@@ -26,8 +26,23 @@ DISASTER_CORPUS = [
     "Severe shortages of storage space at major logistics hubs are causing 'dwell time' penalties and secondary transport delays.",
     "Changes in regulatory inspections have created a bottleneck at the border, slowing down the flow of high-value cargo by 30%.",
     # Natural Disaster (2022 Pakistan Floods)
-    "Catastrophic flooding in Pakistan destroyed over 3,000 km of road network and damaged major rail bridges, halting all inland logistics for weeks."
+    "Catastrophic flooding in Pakistan destroyed over 3,000 km of road network and damaged major rail bridges, halting all inland logistics for weeks.",
+    # Aviation coverage (appended so earlier row indices are unchanged)
+    # 2023 European air traffic control strikes
+    "Air traffic controllers walked out across Europe, grounding thousands of flights and stranding air cargo at major hub airports for days.",
+    # 2010 Eyjafjallajokull ash cloud
+    "A volcanic ash cloud forced the closure of European airspace for six days, halting all air freight and cancelling over 100,000 flights.",
+    # 2023 East Palestine derailment
+    "A freight train derailment and hazardous chemical spill shut the main rail line for weeks, forcing intermodal traffic onto detours."
 ]
+
+# Category of each DISASTER_CORPUS row, stored with the anchors so the API can label threat type.
+DISASTER_CATEGORIES = [
+    "INFRASTRUCTURE", "GEOPOLITICAL", "LABOR", "LABOR", "CYBER", "PUBLIC_HEALTH", "LABOR",
+    "CONGESTION", "CUSTOMS", "LABOR", "CONGESTION", "REGULATORY", "WEATHER",
+    "LABOR", "WEATHER", "INFRASTRUCTURE",
+]
+assert len(DISASTER_CATEGORIES) == len(DISASTER_CORPUS)
 
 SAFE_CORPUS = [
     # Port of Rotterdam Operational Update
@@ -44,7 +59,7 @@ SAFE_CORPUS = [
 
 def precompute_anchors():
     print("--- PRECOMPUTING HISTORICAL NLP ANCHORS ---")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
     
     disaster_matrix = model.encode(DISASTER_CORPUS, convert_to_tensor=True)
     safe_matrix = model.encode(SAFE_CORPUS, convert_to_tensor=True)
@@ -53,8 +68,9 @@ def precompute_anchors():
     data = {
         "disaster_matrix": disaster_matrix,
         "safe_matrix": safe_matrix,
+        "disaster_categories": DISASTER_CATEGORIES,
         "model_name": "all-MiniLM-L6-v2",
-        "corpus_version": "2.0.0-Historical"
+        "corpus_version": "2.1.0-Historical"
     }
     
     if not os.path.exists('Execution'):

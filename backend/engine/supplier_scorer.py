@@ -27,7 +27,7 @@ class SupplierScorer:
         for s in filtered:
             # Deterministic Scoring Base
             # 1. Cost Score (0.3)
-            cost_score = 1.0 - (s['unit_cost'] / 1000.0) # Normalized to $1k cap for demo
+            cost_score = max(0.0, 1.0 - (s['unit_cost'] / 1000.0)) # Normalized to $1k cap; costlier suppliers score 0
             
             # 2. Lead Time Score (0.3)
             # Base lead time + disruption penalty
@@ -37,7 +37,7 @@ class SupplierScorer:
             if active_disruptions:
                 for node, impact in active_disruptions.items():
                     if node == s['location_hub'] or node in s.get('transit_choke_points', []):
-                        # Apply lead time penalty: 10% of delay hours converted to days
+                        # Lead time penalty: half of the disruption delay, in days (buffer stock absorbs the rest)
                         penalty_days = impact['delay'] / 24.0 * 0.5 
                         effective_lead_time += penalty_days
                         disruption_penalty += penalty_days
