@@ -434,3 +434,6 @@ body {
 /* Let selects shrink inside grid columns instead of overflowing (long labels, e.g. in Hindi). */
 .sc-input-group { min-width: 0; }
 .sc-select, .sc-input { width: 100%; min-width: 0; text-overflow: ellipsis; }
+.demo-banner { background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.35); color: #ddd6fe; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.82rem; line-height: 1.45; }
+.demo-banner a { color: #c4b5fd; font-weight: 700; }
+.demo-select { border-color: rgba(139, 92, 246, 0.6); }

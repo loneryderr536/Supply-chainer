@@ -6,6 +6,10 @@ Supplychainer finds the best way to move cargo between two places, by ship, plan
 Unlike a normal route planner, it also watches for trouble: a blocked canal, a port strike, a storm.
 It then tells you which route to take, how long it will *really* take, and why.
 
+🌐 **Live demo:** https://loneryderr536.github.io/Supply-chainer/
+*(The online demo shows real results recorded from the engine. Pick a route from "Demo routes". Run it
+locally for the full live engine.)*
+
 ---
 
 ## What it does
@@ -154,6 +158,7 @@ Optional extras:
   `AISSTREAM_API_KEY=your-key`.
 - **PostgreSQL:** start the server with `DATABASE_URL=postgresql://user:pass@localhost/supplychainer`.
 - **Run the tests:** `pytest`
+- **Refresh the online demo:** `python scripts/build_demo_data.py`, then push. GitHub Pages rebuilds automatically.
 
 ---
 

@@ -1,4 +1,10 @@
+import { demoRequest, demoUrl } from './demo.js';
+
+// Static GitHub Pages build: answer from recorded engine results instead of a live server.
+export const DEMO = import.meta.env.VITE_STATIC_DEMO === 'true';
+
 async function request(path, options = {}) {
+  if (DEMO) return demoRequest(options.method || 'GET', path, options.body);
   const res = await fetch(path, {
     headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
     ...options,
@@ -14,6 +20,9 @@ export const api = {
   post: (path, body) => request(path, { method: 'POST', body }),
   del: (path) => request(path, { method: 'DELETE' }),
 };
+
+// URL for a downloadable export (PDF/CSV/JSON); static files in the demo build.
+export const apiUrl = (path) => (DEMO ? demoUrl(path) : path);
 
 export const MODE_COLORS = {
   SEA: '#3b82f6',

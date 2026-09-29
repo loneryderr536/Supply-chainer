@@ -3,6 +3,7 @@ import {
   Shield, AlertTriangle, Clock, TrendingUp, Info, 
   BarChart3, Package, Truck, Database, Activity, CheckCircle2, ShieldAlert, Zap
 } from 'lucide-react';
+import { api } from './api.js';
 
 export default function SupplierIntelligence({ onNavigate }) {
   const [suppliers, setSuppliers] = useState([]);
@@ -18,9 +19,7 @@ export default function SupplierIntelligence({ onNavigate }) {
   useEffect(() => {
     const fetchScenarios = async () => {
       try {
-        const res = await fetch('/api/scenarios');
-        const data = await res.json();
-        setScenarios(data);
+        setScenarios(await api.get('/api/scenarios'));
       } catch (e) { console.error(e); }
     };
     fetchScenarios();
@@ -33,18 +32,13 @@ export default function SupplierIntelligence({ onNavigate }) {
   const fetchSourcingData = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/suppliers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          category,
-          current_inventory: inventory,
-          safety_stock: safetyStock,
-          demand_forecast: forecast,
-          scenario
-        })
+      const data = await api.post('/api/suppliers', {
+        category,
+        current_inventory: inventory,
+        safety_stock: safetyStock,
+        demand_forecast: forecast,
+        scenario
       });
-      const data = await res.json();
       setSuppliers(data.suppliers);
       setAdvice(data.advice);
     } catch (e) { console.error(e); }

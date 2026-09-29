@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import BenchmarkCharts from './BenchmarkCharts.jsx';
 import RouteRecommender from './RouteRecommender.jsx';
 import SupplierIntelligence from './SupplierIntelligence.jsx';
+import { api, DEMO } from './api.js';
 
 export default function App() {
   const [network, setNetwork] = useState({ nodes: [], edges: [] });
@@ -10,10 +11,11 @@ export default function App() {
   const [currentView, setCurrentView] = useState('recommend');
 
   useEffect(() => {
-    fetch('/api/network')
-      .then((r) => r.json())
-      .then(setNetwork)
-      .catch(console.error);
+    api.get('/api/network').then(setNetwork).catch(console.error);
+    if (DEMO) {
+      setStatus({ engine_status: 'DEMO' });  // no live server behind the static demo
+      return undefined;
+    }
 
     // One socket for engine status (every 2s) and pushed route alerts; reconnects if the API restarts.
     let ws;

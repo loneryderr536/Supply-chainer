@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import RouteMap from './RouteMap.jsx';
 import LiveOps from './LiveOps.jsx';
-import { api, MODE_COLORS, hubName } from './api.js';
+import { api, apiUrl, DEMO, MODE_COLORS, hubName } from './api.js';
+import { demoManifest } from './demo.js';
 import { useI18n, explain, LANGUAGES, CURRENCIES } from './i18n.jsx';
 
 const PERSONA_CLASS = { FASTEST: 'tag-fastest', SAFEST: 'tag-safest', BALANCED: 'tag-balanced' };
@@ -72,6 +73,7 @@ const RouteRecommender = ({ onNavigate, status, network, alertTick }) => {
   const i18n = useI18n();
   const { t, money, num, lang, setLang, currency, setCurrency, fx, toUsd } = i18n;
   const [cargoValue, setCargoValue] = useState('');
+  const [demo, setDemo] = useState(null);
   const [carryRate, setCarryRate] = useState('25');
   const [source, setSource] = useState('');
   const [destination, setDestination] = useState('');
@@ -106,6 +108,7 @@ const RouteRecommender = ({ onNavigate, status, network, alertTick }) => {
     .catch(console.error), []);
 
   useEffect(() => { loadScenarios(); loadWatches(); loadAlerts(); loadHistory(); loadIntel(); }, []);
+  useEffect(() => { if (DEMO) demoManifest().then(setDemo).catch(console.error); }, []);
   // A pushed alert arrived over the WebSocket: refresh the alert list and jump to it.
   useEffect(() => { if (alertTick) { loadAlerts(); setRightTab('ops'); } }, [alertTick]);
 
@@ -146,6 +149,24 @@ const RouteRecommender = ({ onNavigate, status, network, alertTick }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Demo build: fill the form with a recorded request and show its real engine result.
+  const runPreset = async (id) => {
+    const p = demo?.presets.find((x) => x.id === id);
+    if (!p) return;
+    const r = p.request;
+    setSource(''); setDestination('');
+    setSearchQuery({ source: r.source, dest: r.destination });
+    setTransportMode(r.transport_preference); setRoutingPolicy(r.routing_policy);
+    setCargoType(r.cargo_type); setPriority(r.priority);
+    setOperationalConfig(r.scenario || 'NORMAL');
+    setCarryRate(String(Math.round(r.carrying_cost_rate * 100)));
+    const rate = fx.rates?.[currency] || 1;
+    setCargoValue(r.cargo_value_usd ? String(Math.round(r.cargo_value_usd * rate)) : '');
+    setError(null); setWatchNote(null);
+    const data = await api.post('/api/recommend', r);
+    if (data.error) { setError(data.error); setResult(null); } else { setResult(data); setSelected(0); }
   };
 
   const handleSearch = async (type, query) => {
@@ -236,6 +257,15 @@ const RouteRecommender = ({ onNavigate, status, network, alertTick }) => {
 
       <aside className="sidebar-left">
         <h2 className="panel-title"><Terminal size={14} /> {t('input.title')}</h2>
+        {DEMO && demo && (
+          <div className="sc-input-group">
+            <label className="sc-label" htmlFor="preset">{t('demo.presets')}</label>
+            <select id="preset" className="sc-select demo-select" value="" onChange={(e) => runPreset(e.target.value)}>
+              <option value="">{t('demo.pick', { n: demo.presets.length })}</option>
+              {demo.presets.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </div>
+        )}
         {searchBox('source', t('input.origin'))}
         {searchBox('dest', t('input.destination'))}
 
@@ -298,6 +328,12 @@ const RouteRecommender = ({ onNavigate, status, network, alertTick }) => {
       </aside>
 
       <main className="main-content">
+        {DEMO && (
+          <div className="demo-banner" role="note">
+            <b>{t('demo.title')}</b> {t('demo.banner', { date: demo?.generated_at || '' })}{' '}
+            <a href="https://github.com/loneryderr536/Supply-chainer" target="_blank" rel="noreferrer">{t('demo.local')}</a>
+          </div>
+        )}
         {(whatIf || activeScenarios.length > 0) && (
           <div className="scenario-banner animate-slide-in">
             <AlertTriangle size={20} />
@@ -425,11 +461,11 @@ const RouteRecommender = ({ onNavigate, status, network, alertTick }) => {
 
             {result.run_id && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <a className="ops-btn" href={`/api/runs/${result.run_id}/report.pdf?currency=${currency}`}>
+                <a className="ops-btn" href={apiUrl(`/api/runs/${result.run_id}/report.pdf?currency=${currency}`)} target="_blank" rel="noreferrer">
                   <Download size={12} /> {t('audit.pdf')}
                 </a>
-                <a className="ops-btn" href={`/api/runs/${result.run_id}/export.csv`}><Download size={12} /> {t('audit.csv')}</a>
-                <a className="ops-btn" href={`/api/runs/${result.run_id}/export.json`} target="_blank" rel="noreferrer">
+                <a className="ops-btn" href={apiUrl(`/api/runs/${result.run_id}/export.csv`)} download><Download size={12} /> {t('audit.csv')}</a>
+                <a className="ops-btn" href={apiUrl(`/api/runs/${result.run_id}/export.json`)} target="_blank" rel="noreferrer">
                   <Download size={12} /> {t('audit.json')}
                 </a>
               </div>
