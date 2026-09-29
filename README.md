@@ -1,318 +1,412 @@
-# Supplychainer: Context-Aware Agentic Routing Engine
+# Supplychainer
 
-> **An NLP-driven Risk Assessment API & Executive Command Dashboard for Dynamic Supply Chain Graph Routing.**
+**Risk-aware multimodal route planning for global supply chains.**
 
-Traditional supply chain routing algorithms (like Dijkstra or A*) rely on static distances. But in the real world, supply chains are disrupted by dynamic **Black Swan events**—hurricanes, worker strikes, and geopolitical blockades. 
+Supplychainer plans freight routes across sea, air, rail and road, and keeps them honest when the
+world changes. It reads disruption signals (scripted scenarios, live news, analyst reports), turns
+them into calibrated delay estimates with a quantile ML model, and recommends routes for three
+decision styles: *fastest*, *balanced* and *safest*. An executive dashboard shows the options on a
+map, explains every number, monitors chosen routes and raises alerts when a new disruption hits them.
 
-**Supplychainer** is a dual-component platform:
-1. **Agentic AI Backend**: Intercepts route requests, reads live global news along the path, applies logical context filters, and mathematically calculates the **85th-percentile worst-case delay**.
-2. **Executive Command Dashboard**: A high-performance, multimodal React frontend to visualize risks, trigger live simulations (like a Suez blockage), and perform comparative intelligence auditing.
-
----
-
-##  Key Features
-
-* **Real-time Threat Intelligence**: Monitors global RSS feeds to detect local disruptions before they trap inventory.
-* **Context-Aware Relevance Filter (CARF)**: Eliminates false positives (e.g., ignoring a seaport strike if the transport mode is Rail).
-* **Quantile ML Risk Assessment**: Gradient Boosting quantile regressors (p50/p85/p95) trained on 50,000 synthetic leg delays drawn from distributions fitted to published UNCTAD / World Bank / STB medians and p90s, with historical incidents (Suez 2021, Red Sea 2024, …) injected as outlier clusters. See `Code/real_dataset_builder.py`.
-* **Executive Dashboard**: A visually stunning 3-column command interface featuring real-time tradeoff strips, operational configuration drop-downs, and forensic audit trails.
-
----
-
-##  The Architecture Pipeline
-
-Our system decouples sensory data from mathematical risk using a 4-stage pipeline:
-
-1. **The Targeted Fetch:** The routing algorithm requests a path (e.g., Shanghai to Rotterdam). The API evaluates the Origin, Destination, and dynamic Choke Points.
-2. **The Sensory Brain (Contrastive NLP):** We utilize a `SentenceTransformer` (`all-MiniLM-L6-v2`) with **Contrastive Semantic Anchoring**. It reads live news texts, splits them via semantic chunking, and calculates a pure "Threat Margin" against a multi-domain matrix of Disasters vs. Safe baseline scenarios.
-3. **The Logic Gate - CARF System:** The **CARF** prevents hallucinated delays. If the news reports a *sinking ship*, but the transport mode is an *EV Delivery Van*, CARF zeroes out the threat. It ensures spatial and modal relevance.
-4. **The Decision Brain - Quantile ML:** The context-filtered NLP score, combined with tabular operational data, is fed into a **Gradient Boosting Regressor**. We use a `Quantile Loss` function (alpha=0.85) to predict the worst-case scenario buffer.
+<p>
+<img alt="Python 3.11" src="https://img.shields.io/badge/python-3.11-blue">
+<img alt="FastAPI" src="https://img.shields.io/badge/API-FastAPI-009688">
+<img alt="React" src="https://img.shields.io/badge/UI-React%2018%20%2B%20Vite-61dafb">
+<img alt="Tests" src="https://img.shields.io/badge/tests-80%20passing-brightgreen">
+<img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-lightgrey">
+</p>
 
 ---
 
-##  Project Structure
+## Contents
 
+1. [Highlights](#highlights)
+2. [See it work: the Suez blockage](#see-it-work-the-suez-blockage)
+3. [How it works](#how-it-works)
+4. [Quick start](#quick-start)
+5. [Configuration](#configuration)
+6. [Using the dashboard](#using-the-dashboard)
+7. [API reference](#api-reference)
+8. [Testing](#testing)
+9. [Project structure](#project-structure)
+10. [Prelim audit: what was broken and how it was fixed](#prelim-audit-what-was-broken-and-how-it-was-fixed)
+11. [Known limitations](#known-limitations)
+12. [Roadmap](#roadmap)
+13. [Tech stack](#tech-stack)
+
+---
+
+## Highlights
+
+| | |
+|---|---|
+| **Global multimodal graph** | 440 real ports, airports, rail yards and distribution hubs across 370 cities, split into 931 mode-specific nodes and 6,625 edges. Sea lanes are routed through the real chokepoints (Suez, Bab-el-Mandeb, Hormuz, Malacca, Gibraltar, Panama, Cape of Good Hope). |
+| **Delay ranges, not guesses** | Gradient-boosted quantile models predict p50 / p85 / p95 delay for every leg. Each route reports an ETA band and a fully-correlated worst case. |
+| **Three decision personas** | FASTEST plans on the median, BALANCED on p85, SAFEST on p95 plus risk-hours, so the options diverge for a principled reason when uncertainty grows. |
+| **Explainable** | The riskiest leg of every route gets an exact Shapley attribution ("news severity added +122h"). Every ETA, cost and risk figure is traceable in the audit panel. |
+| **Disruption scenarios** | Six scripted scenarios (Suez blockage, Red Sea escalation, Hormuz closure, LA port strike, Chennai flooding, Dubai air congestion). Closures are impassable and come with a *hold vs. reroute* comparison. |
+| **Live intelligence** | Google News headlines for chokepoints and major hubs, scored by a contrastive NLP model and filtered by mode (CARF). Analysts can file, confirm or dismiss reports. |
+| **Route monitoring** | Watch any recommended route. Activating a scenario or receiving new intel re-prices it and pushes an alert with a concrete alternative (WebSocket + optional webhook). |
+| **Persistence & exports** | SQLite route history, watches and alerts; CSV audit trail and a TMS/ERP-ready shipment-plan JSON. |
+| **Works offline** | The map ships its own coastline and live news degrades gracefully, which suits demos on unreliable Wi-Fi. |
+
+---
+
+## See it work: the Suez blockage
+
+Request: Shanghai → Rotterdam, sea only, with the `SUEZ_BLOCK` scenario.
+
+| | Original prototype | Supplychainer now |
+|---|---|---|
+| Route | Sails straight through the blocked canal | Malacca → Cape of Good Hope → Rotterdam (all personas) |
+| Planned ETA | 649.9 h | 659.3 h |
+| Uncertainty | none | p50 721.1 h · p85 733.3 h · p95 749.1 h |
+| Wait or reroute? | not considered | Waiting for Suez to reopen is **211.4 h slower** → **REROUTE** |
+
+With the scenario *active* instead of a what-if, any monitored Suez route immediately receives a
+**CRITICAL** alert: *"route is impassable at CHOKE-SUEZ. Suggested reroute via CHOKE-MALACCA,
+CHOKE-CAPEGOOD (p50 733.4h, $3,461)."*
+
+Other scenarios behave just as concretely. Under `RED_SEA_CONFLICT`, FASTEST keeps the Suez route
+(+72 h, 85% threat) while SAFEST and BALANCED take the Cape. Under `HORMUZ_CLOSURE`, cargo from Jebel
+Ali is trucked to Sohar, outside the strait, and sails from there.
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Route request] --> B[Node resolver<br/>city / hub / alias to mode-specific nodes]
+    B --> C[Multimodal graph<br/>ocean basins + chokepoint gates]
+    S[Scenarios<br/>what-if or live] --> W
+    N[Live news and analyst reports] --> G[Event + location gates] --> P[Contrastive NLP<br/>severity + threat type] --> F[CARF<br/>mode relevance] --> W
+    M[Quantile ML<br/>p50 / p85 / p95 per leg] --> W
+    C --> W[Persona weighting<br/>FASTEST / BALANCED / SAFEST]
+    W --> D[Dijkstra x 3]
+    D --> R[Routes + ETA band + audit trace<br/>+ Shapley attribution + hold option]
+    R --> H[(SQLite: history,<br/>watches, alerts)]
+    H --> AL[Monitoring and alerts<br/>WebSocket / webhook]
 ```
-Smart_Supply_Chain/
-├── backend/
-│   ├── main.py                  # FastAPI app + all HTTP/WebSocket routes (the real entry point)
-│   ├── requirements.txt
-│   ├── data/
-│   │   ├── canonical_hubs.json       # 440 real-world ports/airports/rail yards/road hubs
-│   │   ├── canonical_locations.json  # city -> per-mode hub lookup
-│   │   └── suppliers.json            # sample supplier records for Supplier Intelligence
-│   └── engine/
-│       ├── multimodal_network.py     # builds the routable graph from canonical_hubs.json
-│       ├── route_recommender.py      # Dijkstra routing + persona weighting (the core solver)
-│       ├── threat_intelligence.py    # NLP threat scoring + CARF filter + ML quantile predictor
-│       ├── news_ingestion.py         # live RSS pull with an offline fallback per mode
-│       ├── scenario_manager.py       # the 6 scripted disruption scenarios
-│       ├── supplier_scorer.py        # supplier ranking + procurement advice
-│       ├── node_resolver.py          # resolves a city/hub name to a graph entry node
-│       ├── sea_lanes.py              # ocean basins + chokepoint gates for maritime edges
-│       ├── store.py                  # SQLite: route history, watches, alerts
-│       ├── monitoring.py             # watch re-evaluation, alerts, CSV/TMS exports
-│       └── (baseline.py, graph_model.py, simulator.py, optimizer.py, evaluator.py,
-│            benchmark_runner.py, or_baseline.py, weather_integration.py, live_routing.py)
-│            — an earlier, US-only prototype pipeline. Not used by the live app — see below.
-├── Execution/
-│   ├── risk_model.pkl             # trained Gradient Boosting quantile regressor (p85)
-│   ├── risk_model_p50.pkl / risk_model_p95.pkl  # band siblings (Code/train_quantile_band.py)
-│   ├── quantile_band_meta.json    # hold-out coverage + Shapley background sample
-│   ├── label_encoders.pkl         # categorical encoders for the model above
-│   ├── nlp_anchors.pt             # precomputed disaster/safe embedding anchors
-│   ├── calibration_profiles.json  # per-mode floor/cap delay calibration
-│   └── api.py                     # an older, standalone prototype API — not used by main.py
-└── frontend/
-    ├── package.json, vite.config.js
-    └── src/
-        ├── App.jsx                   # top-level view switcher
-        ├── RouteRecommender.jsx      # main routing dashboard (calls /api/recommend)
-        ├── SupplierIntelligence.jsx  # supplier ranking dashboard (calls /api/suppliers)
-        └── BenchmarkCharts.jsx       # static, hardcoded benchmark charts — not live-wired
-```
 
-**Two things that look like the main entry point but aren't, so you don't lose time in the wrong file:**
-- `Execution/api.py` is an older, standalone prototype with its own `/predict_route_risk`
-  endpoint. The real, live API is `backend/main.py`.
-- The following files under `backend/engine/` belong to an earlier, US-only prototype and are
-  **not** wired into `main.py`'s actual request path: `baseline.py`, `graph_model.py`,
-  `simulator.py`, `optimizer.py`, `evaluator.py`, `benchmark_runner.py`, `or_baseline.py`,
-  `weather_integration.py`, `live_routing.py`. The live system is the `RouteRecommender` /
-  `ThreatIntelligencePredictor` / `multimodal_network` pipeline described above — that's where
-  your time is best spent.
+### 1. The routing graph
+Every hub is split into one node per transport mode it supports (for example `PORT-SHANGHAI:sea`
+and `PORT-SHANGHAI:road`). Moving between modes inside a hub is a *transfer* edge that carries its
+own time, fee and handling risk. Physical links are two-way. Sea ports are assigned to ocean
+basins (`backend/engine/sea_lanes.py`), and any voyage between basins must pass the chokepoints that
+actually join them. That's why closing Suez forces the Cape, and why Red Sea or Hormuz events affect
+the routes they should.
+
+### 2. Disruption signals
+* **Scenarios** (`scenario_manager.py`) mark hubs as delayed, threatened or closed. A what-if applies
+  to one request only; an *activated* scenario becomes part of the shared live picture.
+* **Live news** (`news_ingestion.py`) scans about 40 chokepoints and major hubs every 15 minutes. A
+  headline must name the hub and describe a disruption event before it is scored. Unverified news
+  counts at 50% until an analyst confirms it.
+* **Analyst reports** are scored the same way at full weight, which also makes the pipeline easy to
+  demonstrate without internet access.
+
+### 3. NLP and CARF
+A `SentenceTransformer` (`all-MiniLM-L6-v2`) compares each sentence with 16 historical disaster
+anchors (Ever Given, Red Sea attacks, port strikes, NotPetya, floods…) and 5 normal-operations
+anchors. The margin gives a severity score and the nearest anchor gives a threat type (LABOR,
+GEOPOLITICAL, WEATHER, CONGESTION…). The **Context-Aware Relevance Filter** then keeps the threat
+for legs of the mode the news is about (or for all modes if the news is mode-agnostic, such as a
+war or flood) and drops it for other modes. A port strike therefore doesn't delay a train.
+
+### 4. Quantile delay model
+Three `GradientBoostingRegressor` models (quantile loss, α = 0.50 / 0.85 / 0.95) predict leg delay
+from origin, destination, mode, weather and news severity. They are trained on 50,000 synthetic leg
+delays drawn from distributions fitted to published UNCTAD, World Bank and STB medians and p90s,
+with historical incidents injected as outlier clusters (`Code/real_dataset_builder.py`). Hold-out
+coverage is 0.51 / 0.85 / 0.95. Predictions are clamped to per-mode calibration bounds and
+pre-computed into lookup tables, so routing can query them inside Dijkstra.
+
+### 5. Personas
+
+| Persona | Delay quantile | Edge weight |
+|---|---|---|
+| FASTEST | p50 | time + delay |
+| BALANCED | p85 | 0.3 · time / priority + 0.5 · cost / 150 + 8 · threat |
+| SAFEST | p95 | time + delay + 240 h × threat |
+
+`STRICT` mode restricts a route to the chosen mode plus first- and last-mile road; `PREFERRED`
+makes other modes 1.5× more expensive. Cargo restrictions apply automatically (perishable: no sea,
+hazardous: no air, oversize: no road).
 
 ---
 
-##  Decision Superiority Benchmarks
+## Quick start
 
-Supplychainer shifts logistics from geometric shortest paths to optimal business decisions:
-* **Suez Canal Failure**: Reroutes automatically via Cape of Good Hope, avoiding infinite delay backlogs.
-* **Persona trade-offs**: FASTEST, BALANCED and SAFEST price delay at p50, p85 and p95 respectively, so they diverge when uncertainty rises (e.g. under `RED_SEA_CONFLICT` FASTEST keeps Suez while SAFEST/BALANCED take the Cape). Cargo value / inventory carrying cost is not modelled yet.
-* **Latency**: ~25-130 ms per `/api/recommend` on a laptop (three personas over 931 virtual nodes); the first request that needs a Shapley attribution on a mode-prior leg takes up to ~0.5 s, then it is cached.
+**Requirements:** Python 3.11, Node.js 18+ and about 2 GB of disk for PyTorch and the sentence-transformer.
 
----
+Run everything from the repository root.
 
-##  How to Run Locally
-
-### 1. Backend Service (FastAPI)
-
-Run everything from the **project root** (this folder, `Smart_Supply_Chain/`) — not from inside
-`backend/`. `backend/main.py` uses relative imports (`from .engine...`), which only resolve
-when it's imported as part of the `backend` package, and its model-loading code references
-`./Execution/risk_model.pkl` relative to the working directory you launch from. Both of those
-require the project root as your working directory.
-
-The ML model (`risk_model.pkl`) and categorical encoders (`label_encoders.pkl`) are pre-trained and included in `Execution/`. You **do not** need the proprietary CSV dataset to run the API.
+### Backend (FastAPI)
 
 ```bash
-python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn backend.main:app --reload
+uvicorn backend.main:app --port 8000
 ```
-*The first boot may take 10-20 seconds to load the HuggingFace transformer weights into memory. API Docs available at `http://127.0.0.1:8000/docs`.*
 
-### 2. Executive Frontend (React/Vite)
+The first start downloads the `all-MiniLM-L6-v2` weights and takes 10–20 seconds to warm up.
+Interactive API docs are at http://127.0.0.1:8000/docs.
+
+### Frontend (React + Vite)
 
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-*Access the dashboard at `http://localhost:5173` (or the port specified by Vite).*
+
+Open http://localhost:5173. Vite proxies `/api` and `/ws` to the backend on port 8000.
+
+> If `npm run dev` fails with *permission denied*, run Vite directly:
+> `node node_modules/vite/bin/vite.js --port 5173`
+
+### Retraining (optional)
+
+The trained artifacts in `Execution/` are committed, so no dataset is needed to run the app. To
+regenerate them:
+
+```bash
+python Code/train_quantile_band.py   # p50/p95 models; verifies the retrained p85 matches the shipped one
+python Code/precompute_nlp.py        # NLP anchor embeddings
+```
 
 ---
 
-##  Tests
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LIVE_INTEL` | `true` | Scan Google News at startup and on a timer. Set `false` for offline or deterministic runs. |
+| `INTEL_REFRESH_S` | `900` | Seconds between live news scans. |
+| `SUPPLYCHAINER_DB` | `backend/data/supplychainer.db` | SQLite file for history, watches and alerts. |
+| `ALERT_WEBHOOK_URL` | *(unset)* | If set, every route alert is POSTed here as JSON (`supplychainer.route_alert.v1`). |
+| `DEMO_MODE` | `false` | Skip model warm-up and use deterministic delay priors. |
+
+---
+
+## Using the dashboard
+
+1. **Plan:** enter an origin and destination (city, hub name or code such as `PORT-SHANGHAI`),
+   choose a mode, policy, cargo type and priority, and optionally a *what-if* scenario.
+2. **Compare:** each card shows the planned ETA, the p50/p85/p95 band, cost, risk, a plain-language
+   explanation built only from real numbers, and the legs. Click a card to highlight it on the map.
+3. **Audit:** the *Audit* tab breaks down ETA, the ML delay buffer, cost and risk sources, plus a
+   Shapley chart of why the riskiest leg is slow. Export the run as CSV or TMS JSON.
+4. **Monitor:** press **Monitor** on a card. In *Live Ops*, activate a scenario or file an intel
+   report and any affected route raises an alert with a suggested reroute.
+5. **Review:** the *History* tab lists every saved run and reopens it.
+
+The **Supplier Intelligence** view ranks suppliers by cost, lead time and disruption-adjusted
+reliability, and gives procurement advice from inventory, safety stock and forecast.
+
+---
+
+## API reference
+
+Full schema at `/docs`. Main endpoints:
+
+| Method & path | Description |
+|---|---|
+| `POST /api/recommend` | Route options; saved to history and returns a `run_id` |
+| `GET /api/history` · `GET /api/runs/{id}` | Saved runs |
+| `GET /api/runs/{id}/export.csv` | Leg-level audit trail |
+| `GET /api/runs/{id}/export.json` | Shipment plan for TMS/ERP (`supplychainer.shipment_plan.v1`) |
+| `GET /api/scenarios` | Scenarios and whether each is live |
+| `POST /api/scenarios/{id}/activate` · `/deactivate` | Change the live picture; re-checks monitored routes |
+| `POST /api/watches` · `GET /api/watches` · `DELETE /api/watches/{id}` | Route monitoring |
+| `GET /api/alerts` · `POST /api/alerts/{id}/ack` | Alerts (also pushed on `/ws`) |
+| `GET /api/intel` · `POST /api/intel/scan` · `POST /api/intel/report` · `DELETE /api/intel/{hub}` | Live and analyst intelligence |
+| `GET /api/network` · `GET /api/hubs` · `GET /api/hubs/search?q=` · `GET /api/cities` | Registry and map data |
+| `POST /api/suppliers` | Supplier ranking and procurement advice |
+| `GET /api/status` · `WS /ws` | Engine health; status stream and alert push |
+
+### Example
 
 ```bash
-pip install -r requirements.txt
-pytest            # ~75 tests: NLP/CARF, quantile model, graph topology, every scenario, API, alerts
-```
-The tests assert numbers, not just "no crash": e.g. under `SUEZ_BLOCK` no option may touch
-`CHOKE-SUEZ`, the hold option must contain exactly the 240h salvage window, and a scenario delay
-must be counted once per hub even when the route transfers modes inside it.
-
-Environment switches: `LIVE_INTEL=false` disables the Google News scan, `SUPPLYCHAINER_DB` sets
-the SQLite path (default `backend/data/supplychainer.db`), `ALERT_WEBHOOK_URL` receives every
-route alert as JSON.
-
-##  API Usage Example
-
-**Endpoint:** `POST /api/recommend`
-
-```json
-{
-  "source": "Shanghai",
-  "destination": "Rotterdam",
-  "transport_preference": "sea",
-  "routing_policy": "STRICT",
-  "cargo_type": "general",
-  "priority": "normal",
-  "scenario": "SUEZ_BLOCK"
-}
+curl -s localhost:8000/api/recommend -H 'content-type: application/json' -d '{
+  "source": "Shanghai", "destination": "Rotterdam",
+  "transport_preference": "sea", "routing_policy": "STRICT",
+  "cargo_type": "general", "priority": "normal", "scenario": "SUEZ_BLOCK"
+}'
 ```
 
-**Response** (abbreviated; real output with `LIVE_INTEL=false`, since live headlines change the numbers):
+Abbreviated response (captured with `LIVE_INTEL=false`, since live headlines change the numbers):
+
 ```json
 {
   "applied_scenarios": ["SUEZ_BLOCK"],
   "closed_hubs": ["CHOKE-SUEZ"],
-  "hold_option": { "verdict": "REROUTE", "delta_vs_best_reroute_h": 211.4,
-                   "note": "Waiting for CHOKE-SUEZ to reopen is 211.4h slower (p50) than the best reroute..." },
+  "hold_option": {
+    "verdict": "REROUTE",
+    "delta_vs_best_reroute_h": 211.4,
+    "note": "Waiting for CHOKE-SUEZ to reopen is 211.4h slower (p50) than the best reroute, and depends on the announced reopening estimate holding."
+  },
   "recommendations": [{
     "personas": ["FASTEST", "SAFEST", "BALANCED"],
     "chokepoints": ["CHOKE-MALACCA", "CHOKE-CAPEGOOD"],
     "adjusted_eta": 659.3,
     "eta_band": { "p50": 721.1, "p85": 733.3, "p95": 749.1, "p95_correlated": 769.6 },
     "total_cost": 3461.07,
-    "audit_trace": { "ml": { "buffer_h": { "p50": 61.8, "p85": 82.9, "p95": 110.3 },
-                             "dominant_leg": { "attribution": { "method": "exact_shapley_interventional", "...": "..." } } } }
+    "audit_trace": {
+      "ml": {
+        "buffer_h": { "p50": 61.8, "p85": 82.9, "p95": 110.3 },
+        "dominant_leg": { "attribution": { "method": "exact_shapley_interventional" } }
+      }
+    }
   }],
   "run_id": "1133cb7cefa0"
 }
 ```
 
-| Endpoint | Purpose |
-|---|---|
-| `POST /api/recommend` | Route options (saved to history, returns `run_id`) |
-| `GET /api/history`, `GET /api/runs/{id}` | Route history |
-| `GET /api/runs/{id}/export.csv` | Leg-level audit trail |
-| `GET /api/runs/{id}/export.json` | TMS/ERP shipment plan (`supplychainer.shipment_plan.v1`) |
-| `POST /api/scenarios/{id}/activate` / `deactivate` | Change the live disruption picture; re-checks monitored routes |
-| `POST /api/watches`, `GET /api/watches`, `DELETE /api/watches/{id}` | Monitor a route |
-| `GET /api/alerts`, `POST /api/alerts/{id}/ack` | Alerts (also pushed over `/ws` and to `ALERT_WEBHOOK_URL`) |
-| `GET /api/intel`, `POST /api/intel/scan`, `POST /api/intel/report`, `DELETE /api/intel/{hub}` | Live news / analyst intelligence |
-| `GET /api/network` | Hubs with coordinates + edges per mode (drives the map) |
+---
+
+## Testing
+
+```bash
+pytest
+```
+
+The suite has 80 tests and runs in about 25 seconds once the models are cached. The tests check
+outcomes, not just the absence of crashes:
+
+* **Intelligence:** disasters score above 0.5 and safe text scores 0. CARF is enforced for all four
+  modes. Quantile bands are ordered and within calibration. Shapley values sum to the prediction.
+  Real false-positive headlines from a live scan are rejected.
+* **Routing:** no transit edge is one-way and every chokepoint is reachable. Under `SUEZ_BLOCK` no
+  option touches Suez, and the hold option contains exactly the 240 h salvage window. Scenario
+  delays count once per hub. What-ifs never leak into shared state. Totals match the sum of the legs.
+* **API:** history, CSV and TMS exports, alert raising and de-duplication, intel reports feeding
+  routing, and supplier what-ifs staying request-scoped.
 
 ---
 
-##  Prelim Changes: What Was Broken
+## Project structure
 
-Each of these ran without an error and produced a wrong number or decision.
+```
+.
+├── backend/
+│   ├── main.py                    FastAPI app: HTTP routes, WebSocket, background intel loop
+│   ├── data/
+│   │   ├── canonical_hubs.json        440 hubs with modes, coordinates and connections
+│   │   ├── canonical_locations.json   city -> hub per mode
+│   │   └── suppliers.json             sample suppliers
+│   └── engine/
+│       ├── multimodal_network.py      builds the mode-split graph
+│       ├── sea_lanes.py               ocean basins and chokepoint gates
+│       ├── node_resolver.py           city / hub / alias -> entry nodes
+│       ├── route_recommender.py       persona weighting, Dijkstra, audit trace, hold option
+│       ├── threat_intelligence.py     quantile models, Shapley, contrastive NLP, CARF
+│       ├── news_ingestion.py          Google News ingestion and the intel monitor
+│       ├── scenario_manager.py        scenarios and the live picture
+│       ├── monitoring.py              watches, alerts, CSV / TMS exports
+│       ├── store.py                   SQLite persistence
+│       └── supplier_scorer.py         supplier ranking and procurement advice
+├── Execution/                     trained artifacts: quantile models, encoders, NLP anchors, calibration
+├── Code/                          dataset builder, training and anchor scripts
+├── frontend/src/
+│   ├── App.jsx                    view switcher and WebSocket
+│   ├── RouteRecommender.jsx       main dashboard
+│   ├── RouteMap.jsx               Leaflet map with offline coastline
+│   ├── LiveOps.jsx                scenarios, alerts, watches, intel
+│   ├── SupplierIntelligence.jsx   supplier view
+│   └── api.js                     fetch helpers and colours
+├── tests/                         pytest suite
+└── scratch/, benchmarks/          earlier experiments (not part of the app)
+```
 
-| Area | Symptom | Fix |
+`Execution/api.py` and the engine modules `baseline.py`, `graph_model.py`, `simulator.py`,
+`optimizer.py`, `evaluator.py`, `benchmark_runner.py`, `or_baseline.py`, `weather_integration.py`
+and `live_routing.py` belong to an earlier US-only prototype and are not used by the app.
+
+---
+
+## Prelim audit: what was broken and how it was fixed
+
+The original prototype ran without errors but produced wrong numbers and decisions. Everything
+below was found by checking outputs against real scenarios.
+
+| Area | Problem | Fix |
 |---|---|---|
-| NLP threshold | `margin >= noise_floor` returned 0.0, so real disasters scored 0 | Threat only when margin exceeds the floor |
-| NLP calibration | Multiplier 0.35 (research engine: 3.5); a clear disaster maxed out near 0.1 | Restored 3.5, per-sentence margins so one alarming headline is not diluted |
-| NLP on CPU | Anchors saved from CUDA; `torch.load` failed on CPU hosts, warm-up still reported "complete" | `map_location="cpu"`, anchors re-saved on CPU, warm-up reports degraded state honestly |
-| CARF | Inverted: maritime news was zeroed for *sea* legs; rail/road never filtered; `"port,"` didn't match | Keep own-mode and mode-agnostic news, suppress other-mode news, all four modes, regex tokens |
-| Quantile model | Loaded, never called in routing; unknown hubs silently encoded as "Atlanta Air Hub"; `Leg_Type` always `Global_Freight` | Per-leg p50/p85/p95 in every route, mode prior for untrained hubs, training-consistent leg type |
-| Sea graph | 260 of 342 sea links one-way; Cape/Hormuz/Bab-el-Mandeb/Malacca/Gibraltar had no inbound edge; LA had no sea link | Links are two-way; ports are assigned to ocean basins and cross-basin voyages must pass the real chokepoints |
-| `SUEZ_BLOCK` | Every persona still sailed through the blocked canal (ETA 649.9h) | Closures are impassable; Cape reroute plus an explicit hold-vs-reroute comparison |
-| Red Sea / Hormuz / LA scenarios | No route could reach those hubs, so the scenarios changed nothing | Now reroute or re-price (see tests) |
-| Scenario accounting | Delay re-added on every virtual node of a hub (e.g. road → sea transfer); risk surcharge in trace but not in total | Once per hub visit; surcharge included in `total_cost` |
-| Global state | `recommend()` and `/api/suppliers` activated scenarios globally, so concurrent users leaked what-ifs into each other | What-ifs are request-scoped; a separate, explicit live picture |
-| Node resolver | Always entered through the road hub, ignoring the requested mode | Mode-aware entry; a hub ID may start on any of its modes |
-| Request options | `PREFERRED`, `cargo_type`, `priority` accepted but ignored | Soft 1.5× bias, cargo restrictions, priority-weighted time |
-| Explanations | "reduces cost by 396%" = `cost × 0.15`; "risk reduced by 95%" = `1 - threat` | Built only from numbers in the candidate set |
-| Registry | Two facilities shared `HUB-CHICAGO` (silently merged); `AIR-CHENNAI` referenced 30× but missing | Split into `HUB-ELKGROVE`; added Chennai airport; builder rejects duplicate IDs |
-| Live news | Ingestor never called; `socket.setdefaulttimeout` changed the timeout process-wide | Wired in with per-request timeouts (see below) |
-| Tests | `truth_tests.py` passed with the disaster zeroed (`0.0 > -0.05`); `test_v6.py` never checked Suez was avoided | Absolute checks + the pytest suite |
-
-##  Prelim Changes: What Was Built
-
-* **Quantile band + explainability.** p50/p95 siblings of the production p85 model are trained on the
-  same seeded dataset (`Code/train_quantile_band.py`; the retrained p85 matches the shipped one to
-  0.36h mean, hold-out coverage 0.51/0.85/0.95). FASTEST plans on p50, BALANCED on p85, SAFEST on p95
-  plus risk-hours. The worst leg of each route gets an exact Shapley attribution (all coalitions,
-  no extra dependency). Route bands assume independent legs; `p95_correlated` is the upper bound.
-* **Live intelligence that actually feeds routing.** Chokepoints and major hubs are scanned on Google News.
-  A headline must name the hub and describe a disruption event before NLP scores it; the hub's name is
-  masked before scoring because the safe anchors mention real ports. Unverified news counts at 50%.
-  Analysts can file or confirm reports (`/api/intel/report`). Threat type (LABOR, GEOPOLITICAL, WEATHER…)
-  comes from the nearest historical anchor.
-* **Interactive map.** Leaflet with a bundled coastline (works offline), mode-coloured legs, closed/disrupted/intel hubs.
-* **Route monitoring and alerts.** Monitor any option; activating a scenario or new intel re-prices it and raises
-  CRITICAL/HIGH/MEDIUM alerts with a concrete alternative. Alerts are pushed over the WebSocket and to a webhook.
-* **Persistence and exports.** SQLite history, watches and alerts survive restarts; CSV audit trail and a
-  TMS/ERP shipment-plan JSON with per-movement offsets, delay buffers and risk provenance.
-
-**Known limits.** The quantile model was trained on 16 hubs, so most legs use the mode prior (reported per
-route). Aviation headlines still score weakly: one safe anchor is an air-cargo sentence close to most
-aviation news. Sea distances are great-circle between waypoints. Live scenario activations are in memory
-(history, watches and alerts are persisted). `BenchmarkCharts.jsx` and `benchmarks/decision_superiority.py`
-are pre-existing and not wired to the current engine.
+| NLP threshold | `margin >= noise_floor` returned 0, so real disasters scored 0 | Threat only above the floor |
+| NLP calibration | Multiplier 0.35 instead of the research engine's 3.5 | Restored; per-sentence margins so one alarming headline isn't diluted |
+| NLP on CPU | CUDA-saved anchors failed to load on CPU, yet warm-up reported success | CPU loading; degraded state reported honestly |
+| CARF | Inverted (sea news zeroed for sea legs); rail and road never filtered | Correct logic for all four modes |
+| Quantile model | Never called by routing; unknown hubs silently encoded as "Atlanta Air Hub" | Used on every leg; mode prior for unknown hubs |
+| Sea graph | 260 of 342 sea links one-way; Cape, Hormuz, Bab-el-Mandeb and Malacca unreachable | Two-way links; basin and chokepoint lane model |
+| `SUEZ_BLOCK` | Routes sailed through the blocked canal | Closures impassable; Cape reroute and hold-vs-reroute comparison |
+| Red Sea, Hormuz, LA scenarios | Changed nothing, because no route could reach those hubs | Now reroute or re-price |
+| Scenario accounting | Delay re-added at every mode change inside a hub; surcharge missing from totals | Once per hub visit; surcharge in `total_cost` |
+| Shared state | What-ifs activated globally and leaked between users | Request-scoped what-ifs; explicit live picture |
+| Request options | Mode preference, `PREFERRED`, cargo type and priority ignored | All honoured |
+| Explanations | Invented figures ("reduces cost by 396%") | Built only from real candidate numbers |
+| Registry | Two facilities shared `HUB-CHICAGO`; `AIR-CHENNAI` referenced but missing | Split into `HUB-ELKGROVE`; hub added; duplicate IDs rejected |
+| Live news | Never called; process-wide socket timeout | Wired in with per-request timeouts, gates and confidence weighting |
+| Supplier risk | "Risk" column was `1 − decision score`, flagging cheap but slow suppliers | Disruption-adjusted unreliability |
+| Tests | Scratch checks passed while the bugs were present | 80-test pytest suite with absolute assertions |
 
 ---
 
-## 💻 Tech Stack
+## Known limitations
 
-* **Frontend**: React, Vite, Vanilla CSS (Executive Dark-Mode Aesthetic)
-* **Backend**: FastAPI, Python, Uvicorn
-* **Machine Learning**: Scikit-Learn (Gradient Boosting with Quantile Loss)
-* **NLP**: HuggingFace Sentence-Transformers
-* **Data Ops**: Pandas, NumPy, NetworkX
-
----
-
-##  TatHack Prelim Challenge
-
-This repository is your starting point. There are two things to work on, and you're free to
-lean into either or both:
-
-**1. Fix what's broken.** The codebase has a handful of intentionally introduced issues. None
-of them crash the app or throw a visible error — they're logic bugs that quietly produce the
-wrong number or the wrong decision while everything still "runs fine." Don't trust that a
-feature works just because it doesn't error out: test it against a real scenario (for example,
-activate the `SUEZ_BLOCK` scenario in the dashboard and check whether the reported threat and
-delay actually reflect it) and check the numbers, not just the absence of a crash.
-
-**2. Build what's missing.** Pick one or more ideas from the list below — or bring your own —
-and extend the platform. We're not scoring on how many features you bolt on; we're scoring on
-whether what you build is genuinely useful, correctly wired end-to-end (not just a UI mockup),
-and whether you can explain the trade-offs you made.
+* **Model coverage:** the delay model was trained on 16 hubs. Other hubs use a per-mode prior, and
+  each route reports how many of its legs did so.
+* **Live news precision:** event and location gates remove most noise, but some weak false
+  positives remain. That's why unverified news counts at 50% and can be dismissed. Aviation
+  headlines still score weakly against the current anchor set.
+* **Geometry:** sea distances are great-circle distances between waypoints, not real sailing lanes.
+* **Economics:** cargo value and inventory carrying cost are not modelled yet.
+* **State:** activated scenarios live in memory; history, watches and alerts are persisted.
+* **Legacy:** `BenchmarkCharts.jsx` and `benchmarks/decision_superiority.py` are pre-existing and
+  not wired to the current engine.
 
 ---
 
-##  Where You Can Take This
+## Roadmap
 
-Supplychainer is a working prototype, not a finished product. Here's where the biggest
-opportunities are if you want to push it toward something a real logistics team could rely on
-— pick what's interesting, you don't need to attempt all of it:
+- [x] Wire the p85 model into live routing
+- [x] p50 / p85 / p95 confidence bands
+- [x] Explainability (exact Shapley)
+- [x] CARF for rail and road
+- [x] Threat categorisation
+- [x] Interactive map driven by `/api/network`
+- [x] Route history and CSV / JSON audit export
+- [x] Real-time alerts for affected routes
+- [x] Persistent storage (SQLite)
+- [x] Automated tests
+- [x] Webhook and TMS/ERP export format
+- [ ] AIS vessel tracking and structured event feeds
+- [ ] Authentication, multi-tenancy and rate limiting
+- [ ] PDF boardroom report
+- [ ] Cargo value and inventory carrying cost in BALANCED
+- [ ] Multi-currency and multi-language UI
+- [ ] Postgres and persisted live scenarios
 
-### Smarter AI/ML
-- **Wire the trained ML model into live routing.** `ThreatIntelligencePredictor.predict_worst_case_delay()`
-  — the p85 quantile model — is loaded and warmed up at startup but never actually called by
-  `RouteRecommender.recommend()` today. Only the NLP+CARF semantic score currently feeds route
-  weighting. Connecting the model's real delay prediction into the routing decision is one of
-  the most meaningful upgrades available in this codebase.
-- Predict multiple quantiles (p50 / p85 / p95) instead of a single point estimate, for a
-  confidence band instead of one number.
-- Add real explainability (e.g. SHAP or permutation importance) to the model's predictions,
-  surfaced through the existing `audit_trace`.
-- Generalize `CARFFilter` to rail and road with the same rigor it already applies to air/sea —
-  it defines relevance keywords for all four modes but only enforces two of them today.
-- Categorize threat *type* (strike / weather / geopolitical / infrastructure), not just
-  magnitude, so downstream logic can react differently to different kinds of disruption.
+---
 
-### Product & Experience
-- Replace the placeholder map text in `App.jsx`'s default view with a real interactive map
-  (Leaflet/Mapbox) driven by the existing `/api/network` endpoint.
-- Route history — persist and compare past recommendations instead of losing them on refresh.
-- Export a route's full audit trail as PDF/CSV for a "boardroom-ready" report.
-- Real-time alerts when a newly activated scenario affects a route you've already generated.
-- A mobile-responsive layout — the current dashboard assumes a wide desktop screen.
+## Tech stack
 
-### Global Reach & Data Coverage
-- Expand beyond the current ~300 canonical hubs to more regions and secondary ports/airports.
-- Multi-language UI — the dashboard is English-only right now.
-- Multi-currency cost display instead of a single implicit currency.
-- Replace or augment Google News RSS with a richer, more verifiable disruption signal (e.g.
-  structured event feeds, AIS vessel tracking, region-specific weather alerts).
-- Accessibility: keyboard navigation, screen-reader labels, color-contrast-safe risk indicators.
+| Layer | Tools |
+|---|---|
+| Backend | Python 3.11, FastAPI, Uvicorn, NetworkX, SQLite |
+| ML / NLP | scikit-learn (quantile gradient boosting), sentence-transformers, PyTorch |
+| Data | pandas, NumPy, feedparser, requests |
+| Frontend | React 18, Vite 5, Leaflet 1.9, topojson / world-atlas, lucide-react, Recharts |
+| Testing | pytest, FastAPI TestClient |
 
-### Reliability & Scale
-- Persist state in a real database instead of in-memory Python objects — right now a restart
-  wipes everything, and there's no per-user or per-company data isolation.
-- Add authentication and basic multi-tenancy.
-- Add automated tests — there currently aren't any, for either the backend or the frontend.
-- Cache or pre-compute more of the graph-weighting work so the engine scales past a few
-  hundred nodes without the per-request cost growing with it.
+---
 
-### Integrations
-- A webhook or export format a real TMS/ERP system could actually consume.
-- An API key / rate-limiting layer, if this were ever exposed publicly.
+## Acknowledgements
 
-*In association with Arvind and TatHack Team.*
+Built for the **TatHack** prelim challenge, in association with Arvind and the TatHack team.
+Delay distributions are anchored to public statistics from UNCTAD, the World Bank and the US
+Surface Transportation Board. Map data © OpenStreetMap contributors, © CARTO, and Natural Earth
+(via `world-atlas`).
+
+Licensed under the Apache License 2.0; see [LICENSE](LICENSE).
